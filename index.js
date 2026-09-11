@@ -41,7 +41,17 @@ const formations = {
   },
   9: {
     name: "3-2-3",
-    positions: ["GK", "LB", "CB", "RB", "LCM", "RCM", "LW", "ST", "RW"]
+    positions: [
+      "GK",
+      "LB",
+      "CB",
+      "RB",
+      "LCM",
+      "RCM",
+      "LW",
+      "ST",
+      "RW"
+    ]
   },
   10: {
     name: "4-2-3",
@@ -109,9 +119,13 @@ client.once("ready", async () => {
 
 client.on("messageDelete", message => {
   for (const [guildId, game] of games) {
-    if (game.messageId === message.id) {
+    if (
+      message.id === game.activityMessageId ||
+      message.id === game.lineupMessageId
+    ) {
       games.delete(guildId);
-      console.log(`Friendly removed because its message was deleted.`);
+      console.log("Friendly removed because a system message was deleted.");
+      break;
     }
   }
 });
@@ -129,15 +143,28 @@ client.on("interactionCreate", async interaction => {
       }
 
       const needed = interaction.options.getInteger("players");
-      const formation = formations[needed];
 
       if (games.has(interaction.guildId)) {
-        const game = games.get(interaction.guildId);
+        const oldGame = games.get(interaction.guildId);
+
+        let valid = false;
 
         try {
-          const channel = await client.channels.fetch(game.channelId);
-          await channel.messages.fetch(game.messageId);
-        } catch {
+          const channel = await client.channels.fetch(oldGame.channelId);
+          await channel.messages.fetch(oldGame.activityMessageId);
+          valid = true;
+        } catch {}
+
+        if (oldGame.lineupMessageId && valid) {
+          try {
+            const channel = await client.channels.fetch(oldGame.channelId);
+            await channel.messages.fetch(oldGame.lineupMessageId);
+          } catch {
+            valid = false;
+          }
+        }
+
+        if (!valid) {
           games.delete(interaction.guildId);
         }
       }
@@ -152,10 +179,11 @@ client.on("interactionCreate", async interaction => {
       const game = {
         hostId: interaction.user.id,
         needed,
+        channelId: interaction.channelId,
+        activityMessageId: null,
+        lineupMessageId: null,
         players: new Set(),
         lineup: new Map(),
-        messageId: null,
-        channelId: interaction.channelId,
         lineupStarted: false,
         locked: false,
         subMode: false
@@ -173,7 +201,7 @@ client.on("interactionCreate", async interaction => {
         fetchReply: true
       });
 
-      game.messageId = message.id;
+      game.activityMessageId = message.id;
 
       return;
     }
@@ -189,7 +217,13 @@ client.on("interactionCreate", async interaction => {
       });
     }
 
-    if (interaction.message.id !== game.messageId) {
+    const isActivityButton =
+      interaction.message.id === game.activityMessageId;
+
+    const isLineupButton =
+      interaction.message.id === game.lineupMessageId;
+
+    if (!isActivityButton && !isLineupButton) {
       return interaction.reply({
         content: "This friendly message is no longer active.",
         ephemeral: true
@@ -217,9 +251,11 @@ client.on("interactionCreate", async interaction => {
         game.lineupStarted = true;
 
         await interaction.update({
-          embeds: [createLineupEmbed(game)],
-          components: createLineupButtons(game)
+          embeds: [createActivityEmbed(game)],
+          components: createActivityButtons()
         });
+
+        await createLineupMessage(interaction, game);
       } else {
         await interaction.update({
           embeds: [createActivityEmbed(game)],
@@ -263,6 +299,19 @@ client.on("interactionCreate", async interaction => {
         embeds: [],
         components: []
       });
+
+      if (game.lineupMessageId) {
+        try {
+          const channel = await client.channels.fetch(game.channelId);
+          const lineup = await channel.messages.fetch(game.lineupMessageId);
+
+          await lineup.edit({
+            content: "Friendly cancelled.",
+            embeds: [],
+            components: []
+          });
+        } catch {}
+      }
 
       return;
     }
@@ -326,7 +375,7 @@ client.on("interactionCreate", async interaction => {
 
         if (!currentPlayer) {
           return interaction.reply({
-            content: "You can only substitute an existing player.",
+            content: "That position isn't occupied.",
             ephemeral: true
           });
         }
@@ -359,21 +408,28 @@ client.on("interactionCreate", async interaction => {
 
       const currentPlayer = game.lineup.get(position);
 
-      if (currentPlayer && currentPlayer !== interaction.user.id) {
+      if (currentPlayer === interaction.user.id) {
+        game.lineup.delete(position);
+
+        await interaction.update({
+          embeds: [createLineupEmbed(game)],
+          components: createLineupButtons(game)
+        });
+
+        return;
+      }
+
+      if (currentPlayer) {
         return interaction.reply({
           content: `${position} is already taken.`,
           ephemeral: true
         });
       }
 
-      const oldPosition = getPlayerPosition(game, interaction.user.id);
-
-      if (oldPosition === position) {
-        return interaction.reply({
-          content: `You're already playing ${position}.`,
-          ephemeral: true
-        });
-      }
+      const oldPosition = getPlayerPosition(
+        game,
+        interaction.user.id
+      );
 
       if (oldPosition) {
         game.lineup.delete(oldPosition);
@@ -393,6 +449,13 @@ client.on("interactionCreate", async interaction => {
       if (interaction.user.id !== game.hostId) {
         return interaction.reply({
           content: "Only the friendly host can lock the lineup.",
+          ephemeral: true
+        });
+      }
+
+      if (game.locked) {
+        return interaction.reply({
+          content: "The lineup is already locked.",
           ephemeral: true
         });
       }
@@ -456,42 +519,91 @@ function createActivityButtons() {
 function createActivityEmbed(game) {
   const formation = formations[game.needed];
 
+  const playerList =
+    game.players.size > 0
+      ? [...game.players]
+          .map((id, index) => `${index + 1}. <@${id}>`)
+          .join("\n")
+      : "No players yet.";
+
+  const ready = game.players.size >= game.needed;
+
   return new EmbedBuilder()
     .setColor(0x18181b)
     .setTitle("Friendly")
     .setDescription(
-      `**${game.players.size}/${game.needed} players**\n\n` +
-      `Formation: **${formation.name}**\n\n` +
-      `🟩 Can play\n` +
-      `🟥 Can't play`
+      `### ${game.players.size}/${game.needed} ${ready ? "READY" : "PLAYERS"}\n` +
+      `\`${formation.name}\`\n\n` +
+      `**Players**\n` +
+      `${playerList}`
     )
+    .addFields({
+      name: ready ? "Status" : "Activity check",
+      value: ready
+        ? "The lineup is ready."
+        : "Press **CAN PLAY** if you're available.",
+      inline: false
+    })
     .setFooter({
       text: "Friendly system"
     });
 }
 
+async function createLineupMessage(interaction, game) {
+  if (game.lineupMessageId) return;
+
+  const channel = interaction.channel;
+
+  if (!channel) return;
+
+  const message = await channel.send({
+    embeds: [createLineupEmbed(game)],
+    components: createLineupButtons(game)
+  });
+
+  game.lineupMessageId = message.id;
+}
+
 function createLineupEmbed(game) {
   const formation = formations[game.needed];
 
-  let description =
-    `**${formation.name}** · ${game.lineup.size}/${formation.positions.length}\n\n`;
+  const get = position => {
+    const id = game.lineup.get(position);
+    return id ? `<@${id}>` : "—";
+  };
 
-  for (const position of formation.positions) {
-    const userId = game.lineup.get(position);
+  let description = "";
 
-    description += userId
-      ? `**${position}**  <@${userId}>\n`
-      : `**${position}**  —\n`;
+  if (formation.name === "3-1-3") {
+    description =
+      `**GK**\n` +
+      `${get("GK")}\n\n` +
+      `**LB**　　**CB**　　**RB**\n` +
+      `${get("LB")}　 ${get("CB")}　 ${get("RB")}\n\n` +
+      `**CAM**\n` +
+      `${get("CAM")}\n\n` +
+      `**LW**　　**ST**　　**RW**\n` +
+      `${get("LW")}　 ${get("ST")}　 ${get("RW")}`;
+  } else {
+    for (const position of formation.positions) {
+      description += `**${position}**\n${get(position)}\n\n`;
+    }
   }
-
-  description += "\nSelect your position or use **SUB** to replace a player.";
 
   return new EmbedBuilder()
     .setColor(0x18181b)
-    .setTitle("Lineup")
-    .setDescription(description)
+    .setTitle("Match Lineup")
+    .setDescription(
+      `**${formation.name}**\n\n` +
+      description
+    )
+    .addFields({
+      name: "Players",
+      value: `${game.lineup.size}/${formation.positions.length} positions selected`,
+      inline: false
+    })
     .setFooter({
-      text: "One player per position"
+      text: "Select a position • click your position again to unchoose • SUB to replace"
     });
 }
 
@@ -499,24 +611,22 @@ function createSubEmbed(game) {
   const formation = formations[game.needed];
 
   let description =
-    `**Substitution** · choose a player to replace\n\n`;
+    `Choose the player you want to replace.\n\n`;
 
   for (const position of formation.positions) {
-    const userId = game.lineup.get(position);
+    const id = game.lineup.get(position);
 
-    if (userId) {
-      description += `**${position}**  <@${userId}>\n`;
+    if (id) {
+      description += `**${position}**  <@${id}>\n`;
     }
   }
-
-  description += "\nChoose the position you want to replace.";
 
   return new EmbedBuilder()
     .setColor(0x18181b)
     .setTitle("Substitution")
     .setDescription(description)
     .setFooter({
-      text: "Select a position to make a substitution"
+      text: "Select an occupied position"
     });
 }
 
@@ -526,15 +636,20 @@ function createFinalLineupEmbed(game) {
   let description = `**${formation.name}**\n\n`;
 
   for (const position of formation.positions) {
-    const userId = game.lineup.get(position);
+    const id = game.lineup.get(position);
 
-    description += `**${position}**  <@${userId}>\n`;
+    description += `**${position}**  <@${id}>\n`;
   }
 
   return new EmbedBuilder()
     .setColor(0x18181b)
     .setTitle("Lineup Locked")
     .setDescription(description)
+    .addFields({
+      name: "Status",
+      value: "Ready for the match.",
+      inline: false
+    })
     .setFooter({
       text: "Friendly system"
     });
@@ -552,8 +667,12 @@ function createLineupButtons(game) {
     const button = new ButtonBuilder()
       .setCustomId(`position_${position}`)
       .setLabel(position)
-      .setStyle(taken ? ButtonStyle.Secondary : ButtonStyle.Primary)
-      .setDisabled(taken);
+      .setStyle(
+        taken
+          ? ButtonStyle.Secondary
+          : ButtonStyle.Primary
+      )
+      .setDisabled(false);
 
     row.addComponents(button);
 
@@ -608,7 +727,11 @@ function createSubButtons(game) {
     const button = new ButtonBuilder()
       .setCustomId(`position_${position}`)
       .setLabel(position)
-      .setStyle(taken ? ButtonStyle.Danger : ButtonStyle.Secondary)
+      .setStyle(
+        taken
+          ? ButtonStyle.Danger
+          : ButtonStyle.Secondary
+      )
       .setDisabled(!taken);
 
     row.addComponents(button);
