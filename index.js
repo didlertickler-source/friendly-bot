@@ -107,6 +107,15 @@ client.once("ready", async () => {
   }
 });
 
+client.on("messageDelete", message => {
+  for (const [guildId, game] of games) {
+    if (game.messageId === message.id) {
+      games.delete(guildId);
+      console.log(`Friendly removed because its message was deleted.`);
+    }
+  }
+});
+
 client.on("interactionCreate", async interaction => {
   try {
     if (interaction.isChatInputCommand()) {
@@ -122,11 +131,15 @@ client.on("interactionCreate", async interaction => {
       const needed = interaction.options.getInteger("players");
       const formation = formations[needed];
 
-      if (!formation) {
-        return interaction.reply({
-          content: "Invalid player count.",
-          ephemeral: true
-        });
+      if (games.has(interaction.guildId)) {
+        const game = games.get(interaction.guildId);
+
+        try {
+          const channel = await client.channels.fetch(game.channelId);
+          await channel.messages.fetch(game.messageId);
+        } catch {
+          games.delete(interaction.guildId);
+        }
       }
 
       if (games.has(interaction.guildId)) {
@@ -144,7 +157,8 @@ client.on("interactionCreate", async interaction => {
         messageId: null,
         channelId: interaction.channelId,
         lineupStarted: false,
-        locked: false
+        locked: false,
+        subMode: false
       };
 
       games.set(interaction.guildId, game);
@@ -152,7 +166,7 @@ client.on("interactionCreate", async interaction => {
       const message = await interaction.reply({
         content: "@everyone",
         embeds: [createActivityEmbed(game)],
-        components: createActivityButtons(game),
+        components: createActivityButtons(),
         allowedMentions: {
           parse: ["everyone"]
         },
@@ -170,16 +184,14 @@ client.on("interactionCreate", async interaction => {
 
     if (!game) {
       return interaction.reply({
-        content:
-          "This friendly is no longer active. Start a new `/friendly`.",
+        content: "This friendly is no longer active. Start a new `/friendly`.",
         ephemeral: true
       });
     }
 
     if (interaction.message.id !== game.messageId) {
       return interaction.reply({
-        content:
-          "This button belongs to an older friendly. Start a new `/friendly`.",
+        content: "This friendly message is no longer active.",
         ephemeral: true
       });
     }
@@ -205,14 +217,13 @@ client.on("interactionCreate", async interaction => {
         game.lineupStarted = true;
 
         await interaction.update({
-          content: "@everyone",
           embeds: [createLineupEmbed(game)],
           components: createLineupButtons(game)
         });
       } else {
         await interaction.update({
           embeds: [createActivityEmbed(game)],
-          components: createActivityButtons(game)
+          components: createActivityButtons()
         });
       }
 
@@ -227,18 +238,11 @@ client.on("interactionCreate", async interaction => {
         });
       }
 
-      if (!game.players.has(interaction.user.id)) {
-        return interaction.reply({
-          content: "You're not currently marked as available.",
-          ephemeral: true
-        });
-      }
-
       game.players.delete(interaction.user.id);
 
       await interaction.update({
         embeds: [createActivityEmbed(game)],
-        components: createActivityButtons(game)
+        components: createActivityButtons()
       });
 
       return;
@@ -263,10 +267,10 @@ client.on("interactionCreate", async interaction => {
       return;
     }
 
-    if (interaction.customId.startsWith("position_")) {
+    if (interaction.customId === "sub_mode") {
       if (!game.lineupStarted) {
         return interaction.reply({
-          content: "The lineup isn't ready yet.",
+          content: "The lineup hasn't started yet.",
           ephemeral: true
         });
       }
@@ -278,9 +282,31 @@ client.on("interactionCreate", async interaction => {
         });
       }
 
-      if (!game.players.has(interaction.user.id)) {
+      game.subMode = true;
+
+      await interaction.update({
+        embeds: [createSubEmbed(game)],
+        components: createSubButtons(game)
+      });
+
+      return;
+    }
+
+    if (interaction.customId === "cancel_sub") {
+      game.subMode = false;
+
+      await interaction.update({
+        embeds: [createLineupEmbed(game)],
+        components: createLineupButtons(game)
+      });
+
+      return;
+    }
+
+    if (interaction.customId.startsWith("position_")) {
+      if (!game.lineupStarted || game.locked) {
         return interaction.reply({
-          content: "You didn't mark yourself as available.",
+          content: "You can't change the lineup right now.",
           ephemeral: true
         });
       }
@@ -291,6 +317,42 @@ client.on("interactionCreate", async interaction => {
       if (!formation.positions.includes(position)) {
         return interaction.reply({
           content: "That position doesn't exist.",
+          ephemeral: true
+        });
+      }
+
+      if (game.subMode) {
+        const currentPlayer = game.lineup.get(position);
+
+        if (!currentPlayer) {
+          return interaction.reply({
+            content: "You can only substitute an existing player.",
+            ephemeral: true
+          });
+        }
+
+        if (currentPlayer === interaction.user.id) {
+          return interaction.reply({
+            content: "You can't substitute yourself.",
+            ephemeral: true
+          });
+        }
+
+        game.lineup.set(position, interaction.user.id);
+        game.players.add(interaction.user.id);
+        game.subMode = false;
+
+        await interaction.update({
+          embeds: [createLineupEmbed(game)],
+          components: createLineupButtons(game)
+        });
+
+        return;
+      }
+
+      if (!game.players.has(interaction.user.id)) {
+        return interaction.reply({
+          content: "You didn't mark yourself as available.",
           ephemeral: true
         });
       }
@@ -335,13 +397,6 @@ client.on("interactionCreate", async interaction => {
         });
       }
 
-      if (game.locked) {
-        return interaction.reply({
-          content: "The lineup is already locked.",
-          ephemeral: true
-        });
-      }
-
       const formation = formations[game.needed];
 
       if (game.lineup.size !== formation.positions.length) {
@@ -354,6 +409,7 @@ client.on("interactionCreate", async interaction => {
       }
 
       game.locked = true;
+      game.subMode = false;
 
       await interaction.update({
         embeds: [createFinalLineupEmbed(game)],
@@ -374,7 +430,7 @@ client.on("interactionCreate", async interaction => {
   }
 });
 
-function createActivityButtons(game) {
+function createActivityButtons() {
   return [
     new ActionRowBuilder().addComponents(
       new ButtonBuilder()
@@ -399,25 +455,16 @@ function createActivityButtons(game) {
 
 function createActivityEmbed(game) {
   const formation = formations[game.needed];
-  const ready = game.players.size >= game.needed;
 
   return new EmbedBuilder()
     .setColor(0x18181b)
     .setTitle("Friendly")
     .setDescription(
       `**${game.players.size}/${game.needed} players**\n\n` +
-      `Formation: **${formation.name}**\n` +
-      `Players: **${game.needed}**\n\n` +
+      `Formation: **${formation.name}**\n\n` +
       `🟩 Can play\n` +
       `🟥 Can't play`
     )
-    .addFields({
-      name: ready ? "Status" : "Activity check",
-      value: ready
-        ? "Lineup is ready."
-        : "React below to confirm your availability.",
-      inline: false
-    })
     .setFooter({
       text: "Friendly system"
     });
@@ -427,7 +474,7 @@ function createLineupEmbed(game) {
   const formation = formations[game.needed];
 
   let description =
-    `**${formation.name}** · ${game.lineup.size}/${formation.positions.length} selected\n\n`;
+    `**${formation.name}** · ${game.lineup.size}/${formation.positions.length}\n\n`;
 
   for (const position of formation.positions) {
     const userId = game.lineup.get(position);
@@ -437,7 +484,7 @@ function createLineupEmbed(game) {
       : `**${position}**  —\n`;
   }
 
-  description += "\nSelect a position below. You can change your position.";
+  description += "\nSelect your position or use **SUB** to replace a player.";
 
   return new EmbedBuilder()
     .setColor(0x18181b)
@@ -445,6 +492,31 @@ function createLineupEmbed(game) {
     .setDescription(description)
     .setFooter({
       text: "One player per position"
+    });
+}
+
+function createSubEmbed(game) {
+  const formation = formations[game.needed];
+
+  let description =
+    `**Substitution** · choose a player to replace\n\n`;
+
+  for (const position of formation.positions) {
+    const userId = game.lineup.get(position);
+
+    if (userId) {
+      description += `**${position}**  <@${userId}>\n`;
+    }
+  }
+
+  description += "\nChoose the position you want to replace.";
+
+  return new EmbedBuilder()
+    .setColor(0x18181b)
+    .setTitle("Substitution")
+    .setDescription(description)
+    .setFooter({
+      text: "Select a position to make a substitution"
     });
 }
 
@@ -498,19 +570,67 @@ function createLineupButtons(game) {
   const complete =
     game.lineup.size === formation.positions.length;
 
-  const lockRow = new ActionRowBuilder().addComponents(
-    new ButtonBuilder()
-      .setCustomId("lock_lineup")
-      .setLabel(complete ? "LOCK LINEUP" : `LOCK ${game.lineup.size}/${formation.positions.length}`)
-      .setStyle(
-        complete
-          ? ButtonStyle.Success
-          : ButtonStyle.Secondary
-      )
-      .setDisabled(!complete)
+  rows.push(
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId("sub_mode")
+        .setLabel("SUB")
+        .setStyle(ButtonStyle.Secondary),
+
+      new ButtonBuilder()
+        .setCustomId("lock_lineup")
+        .setLabel(
+          complete
+            ? "LOCK LINEUP"
+            : `LOCK ${game.lineup.size}/${formation.positions.length}`
+        )
+        .setStyle(
+          complete
+            ? ButtonStyle.Success
+            : ButtonStyle.Secondary
+        )
+        .setDisabled(!complete)
+    )
   );
 
-  rows.push(lockRow);
+  return rows;
+}
+
+function createSubButtons(game) {
+  const formation = formations[game.needed];
+  const rows = [];
+
+  let row = new ActionRowBuilder();
+
+  for (const position of formation.positions) {
+    const taken = game.lineup.has(position);
+
+    const button = new ButtonBuilder()
+      .setCustomId(`position_${position}`)
+      .setLabel(position)
+      .setStyle(taken ? ButtonStyle.Danger : ButtonStyle.Secondary)
+      .setDisabled(!taken);
+
+    row.addComponents(button);
+
+    if (row.components.length === 5) {
+      rows.push(row);
+      row = new ActionRowBuilder();
+    }
+  }
+
+  if (row.components.length > 0) {
+    rows.push(row);
+  }
+
+  rows.push(
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId("cancel_sub")
+        .setLabel("CANCEL")
+        .setStyle(ButtonStyle.Secondary)
+    )
+  );
 
   return rows;
 }
