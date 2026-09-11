@@ -23,42 +23,26 @@ const formations = {
     name: "2-1",
     positions: ["GK", "LB", "RB", "ST"]
   },
-
   5: {
     name: "2-1-1",
     positions: ["GK", "LB", "RB", "CAM", "ST"]
   },
-
   6: {
     name: "2-1-2",
-    positions: ["GK", "LB", "RB", "CAM", "LW", "ST"]
+    positions: ["GK", "LB", "RB", "CAM", "LW", "RW"]
   },
-
   7: {
     name: "3-1-2",
-    positions: ["GK", "LB", "CB", "RB", "CAM", "LW", "ST"]
+    positions: ["GK", "LB", "CB", "RB", "CAM", "LW", "RW"]
   },
-
   8: {
     name: "3-1-3",
     positions: ["GK", "LB", "CB", "RB", "CAM", "LW", "ST", "RW"]
   },
-
   9: {
     name: "3-2-3",
-    positions: [
-      "GK",
-      "LB",
-      "CB",
-      "RB",
-      "LCM",
-      "RCM",
-      "LW",
-      "ST",
-      "RW"
-    ]
+    positions: ["GK", "LB", "CB", "RB", "LCM", "RCM", "LW", "ST", "RW"]
   },
-
   10: {
     name: "4-2-3",
     positions: [
@@ -74,7 +58,6 @@ const formations = {
       "RW"
     ]
   },
-
   11: {
     name: "4-3-3",
     positions: [
@@ -108,9 +91,9 @@ const command = new SlashCommandBuilder()
 client.once("ready", async () => {
   console.log(`Logged in as ${client.user.tag}`);
 
-  const rest = new REST({ version: "10" }).setToken(process.env.TOKEN);
-
   try {
+    const rest = new REST({ version: "10" }).setToken(process.env.TOKEN);
+
     await rest.put(
       Routes.applicationCommands(client.user.id),
       {
@@ -120,7 +103,7 @@ client.once("ready", async () => {
 
     console.log("Friendly system loaded.");
   } catch (error) {
-    console.error("Command registration failed:", error);
+    console.error("Command registration error:", error);
   }
 });
 
@@ -129,26 +112,37 @@ client.on("interactionCreate", async interaction => {
     if (interaction.isChatInputCommand()) {
       if (interaction.commandName !== "friendly") return;
 
-      const needed = interaction.options.getInteger("players");
-
-      if (games.has(interaction.guildId)) {
+      if (!interaction.guildId) {
         return interaction.reply({
-          content:
-            "❌ **There is already an active friendly in this server.**",
+          content: "This command can only be used inside a server.",
           ephemeral: true
         });
       }
 
+      const needed = interaction.options.getInteger("players");
       const formation = formations[needed];
+
+      if (!formation) {
+        return interaction.reply({
+          content: "Invalid player count.",
+          ephemeral: true
+        });
+      }
+
+      if (games.has(interaction.guildId)) {
+        return interaction.reply({
+          content: "There is already a friendly running in this server.",
+          ephemeral: true
+        });
+      }
 
       const game = {
         hostId: interaction.user.id,
         needed,
         players: new Set(),
         lineup: new Map(),
+        messageId: null,
         channelId: interaction.channelId,
-        activityMessageId: null,
-        lineupMessageId: null,
         lineupStarted: false,
         locked: false
       };
@@ -157,15 +151,15 @@ client.on("interactionCreate", async interaction => {
 
       const message = await interaction.reply({
         content: "@everyone",
-        embeds: [createActivityEmbed(game, formation)],
-        components: createActivityButtons(),
+        embeds: [createActivityEmbed(game)],
+        components: createActivityButtons(game),
         allowedMentions: {
           parse: ["everyone"]
         },
         fetchReply: true
       });
 
-      game.activityMessageId = message.id;
+      game.messageId = message.id;
 
       return;
     }
@@ -177,67 +171,75 @@ client.on("interactionCreate", async interaction => {
     if (!game) {
       return interaction.reply({
         content:
-          "❌ **This friendly is no longer active.**\n\n" +
-          "The bot was restarted while this friendly was running. " +
-          "Start a new `/friendly` to create a fresh match.",
+          "This friendly is no longer active. Start a new `/friendly`.",
         ephemeral: true
       });
     }
 
-    if (game.locked) {
+    if (interaction.message.id !== game.messageId) {
       return interaction.reply({
-        content: "🔒 **This lineup is already locked.**",
+        content:
+          "This button belongs to an older friendly. Start a new `/friendly`.",
         ephemeral: true
       });
     }
 
     if (interaction.customId === "can_play") {
-      if (game.lineupStarted) {
+      if (game.lineupStarted || game.locked) {
         return interaction.reply({
-          content:
-            "❌ **The lineup has already started.**\n" +
-            "You can't change availability now.",
+          content: "The lineup has already started.",
           ephemeral: true
         });
       }
 
       if (game.players.has(interaction.user.id)) {
         return interaction.reply({
-          content: "🟩 **You're already marked as available.**",
+          content: "You're already marked as available.",
           ephemeral: true
         });
       }
 
       game.players.add(interaction.user.id);
 
-      await updateActivity(interaction);
+      if (game.players.size >= game.needed) {
+        game.lineupStarted = true;
 
-      if (game.players.size >= game.needed && !game.lineupStarted) {
-        await createLineup(interaction);
+        await interaction.update({
+          content: "@everyone",
+          embeds: [createLineupEmbed(game)],
+          components: createLineupButtons(game)
+        });
+      } else {
+        await interaction.update({
+          embeds: [createActivityEmbed(game)],
+          components: createActivityButtons(game)
+        });
       }
 
       return;
     }
 
     if (interaction.customId === "cant_play") {
-      if (game.lineupStarted) {
+      if (game.lineupStarted || game.locked) {
         return interaction.reply({
-          content:
-            "❌ **The lineup has already started.**\n" +
-            "You can't change availability now.",
+          content: "The lineup has already started.",
+          ephemeral: true
+        });
+      }
+
+      if (!game.players.has(interaction.user.id)) {
+        return interaction.reply({
+          content: "You're not currently marked as available.",
           ephemeral: true
         });
       }
 
       game.players.delete(interaction.user.id);
 
-      for (const [position, userId] of game.lineup) {
-        if (userId === interaction.user.id) {
-          game.lineup.delete(position);
-        }
-      }
-
-      await updateActivity(interaction);
+      await interaction.update({
+        embeds: [createActivityEmbed(game)],
+        components: createActivityButtons(game)
+      });
 
       return;
     }
@@ -245,161 +247,147 @@ client.on("interactionCreate", async interaction => {
     if (interaction.customId === "reset_friendly") {
       if (interaction.user.id !== game.hostId) {
         return interaction.reply({
-          content:
-            "❌ **Only the friendly host can reset the match.**",
+          content: "Only the friendly host can reset it.",
           ephemeral: true
         });
       }
 
       games.delete(interaction.guildId);
 
-      return interaction.update({
-        content: "🛑 **FRIENDLY CANCELLED**",
+      await interaction.update({
+        content: "Friendly cancelled.",
         embeds: [],
         components: []
       });
+
+      return;
     }
 
     if (interaction.customId.startsWith("position_")) {
       if (!game.lineupStarted) {
         return interaction.reply({
-          content:
-            "❌ **The lineup isn't ready yet.**",
+          content: "The lineup isn't ready yet.",
           ephemeral: true
         });
       }
 
-      const position = interaction.customId.replace(
-        "position_",
-        ""
-      );
-
-      const formation = formations[game.needed];
-
-      if (!formation.positions.includes(position)) {
+      if (game.locked) {
         return interaction.reply({
-          content: "❌ **Invalid position.**",
+          content: "The lineup is locked.",
           ephemeral: true
         });
       }
 
       if (!game.players.has(interaction.user.id)) {
         return interaction.reply({
-          content:
-            "❌ **You didn't mark yourself as available.**",
+          content: "You didn't mark yourself as available.",
           ephemeral: true
         });
       }
 
-      const currentPosition = getPlayerPosition(
-        game,
-        interaction.user.id
-      );
+      const position = interaction.customId.replace("position_", "");
+      const formation = formations[game.needed];
 
-      if (currentPosition === position) {
+      if (!formation.positions.includes(position)) {
         return interaction.reply({
-          content:
-            `ℹ️ You're already playing **${position}**.`,
+          content: "That position doesn't exist.",
           ephemeral: true
         });
       }
 
-      if (game.lineup.has(position)) {
+      const currentPlayer = game.lineup.get(position);
+
+      if (currentPlayer && currentPlayer !== interaction.user.id) {
         return interaction.reply({
-          content:
-            `❌ **${position}** is already taken.`,
+          content: `${position} is already taken.`,
           ephemeral: true
         });
       }
 
-      if (currentPosition) {
-        game.lineup.delete(currentPosition);
+      const oldPosition = getPlayerPosition(game, interaction.user.id);
+
+      if (oldPosition === position) {
+        return interaction.reply({
+          content: `You're already playing ${position}.`,
+          ephemeral: true
+        });
+      }
+
+      if (oldPosition) {
+        game.lineup.delete(oldPosition);
       }
 
       game.lineup.set(position, interaction.user.id);
 
-      await updateLineup(interaction);
-
-      return interaction.reply({
-        content:
-          `✅ You're now playing **${position}**.`,
-        ephemeral: true
+      await interaction.update({
+        embeds: [createLineupEmbed(game)],
+        components: createLineupButtons(game)
       });
+
+      return;
     }
 
     if (interaction.customId === "lock_lineup") {
       if (interaction.user.id !== game.hostId) {
         return interaction.reply({
-          content:
-            "❌ **Only the friendly host can lock the lineup.**",
+          content: "Only the friendly host can lock the lineup.",
+          ephemeral: true
+        });
+      }
+
+      if (game.locked) {
+        return interaction.reply({
+          content: "The lineup is already locked.",
           ephemeral: true
         });
       }
 
       const formation = formations[game.needed];
 
-      if (game.lineup.size < formation.positions.length) {
+      if (game.lineup.size !== formation.positions.length) {
         return interaction.reply({
           content:
-            `❌ **The lineup isn't full yet.**\n\n` +
-            `**${game.lineup.size}/${formation.positions.length}** positions filled.`,
+            `The lineup isn't complete yet. ` +
+            `${game.lineup.size}/${formation.positions.length} positions filled.`,
           ephemeral: true
         });
       }
 
       game.locked = true;
 
-      const message =
-        await interaction.channel.messages.fetch(
-          game.lineupMessageId
-        );
-
-      await message.edit({
-        content:
-          "━━━━━━━━━━━━━━━━━━━━\n" +
-          "**🔒 LINEUP LOCKED**\n" +
-          "━━━━━━━━━━━━━━━━━━━━",
-        embeds: [
-          createFinalLineupEmbed(game, formation)
-        ],
+      await interaction.update({
+        embeds: [createFinalLineupEmbed(game)],
         components: []
       });
 
-      return interaction.reply({
-        content:
-          "🔒 **Lineup locked successfully.**",
-        ephemeral: true
-      });
+      return;
     }
   } catch (error) {
     console.error("Interaction error:", error);
 
     if (!interaction.replied && !interaction.deferred) {
       await interaction.reply({
-        content:
-          "❌ **Something went wrong.** Check the Railway logs.",
+        content: "Something went wrong. Try again.",
         ephemeral: true
       }).catch(() => {});
     }
   }
 });
 
-function createActivityButtons(disabled = false) {
+function createActivityButtons(game) {
   return [
     new ActionRowBuilder().addComponents(
       new ButtonBuilder()
         .setCustomId("can_play")
         .setLabel("CAN PLAY")
         .setEmoji("🟩")
-        .setStyle(ButtonStyle.Success)
-        .setDisabled(disabled),
+        .setStyle(ButtonStyle.Success),
 
       new ButtonBuilder()
         .setCustomId("cant_play")
         .setLabel("CAN'T PLAY")
         .setEmoji("🟥")
-        .setStyle(ButtonStyle.Danger)
-        .setDisabled(disabled),
+        .setStyle(ButtonStyle.Danger),
 
       new ButtonBuilder()
         .setCustomId("reset_friendly")
@@ -409,275 +397,127 @@ function createActivityButtons(disabled = false) {
   ];
 }
 
-function createActivityEmbed(game, formation) {
-  const count = game.players.size;
-
-  const status =
-    count >= game.needed
-      ? "🟢 **READY FOR LINEUP**"
-      : `🟡 **${count}/${game.needed} READY**`;
+function createActivityEmbed(game) {
+  const formation = formations[game.needed];
+  const ready = game.players.size >= game.needed;
 
   return new EmbedBuilder()
-    .setColor(0x151515)
-    .setTitle("⚽  FRIENDLY MATCH")
+    .setColor(0x18181b)
+    .setTitle("Friendly")
     .setDescription(
-      "━━━━━━━━━━━━━━━━━━━━\n" +
-      "**ACTIVITY CHECK**\n" +
-      "━━━━━━━━━━━━━━━━━━━━\n\n" +
-      `${status}\n\n` +
-      `👥 **Players:** \`${count}/${game.needed}\`\n` +
-      `📐 **Formation:** \`${formation.name}\`\n\n` +
-      "🟩 **CAN PLAY**\n" +
-      "Click if you're available.\n\n" +
-      "🟥 **CAN'T PLAY**\n" +
-      "Click if you can't play.\n\n" +
-      "━━━━━━━━━━━━━━━━━━━━"
+      `**${game.players.size}/${game.needed} players**\n\n` +
+      `Formation: **${formation.name}**\n` +
+      `Players: **${game.needed}**\n\n` +
+      `🟩 Can play\n` +
+      `🟥 Can't play`
     )
     .addFields({
-      name: "HOST",
-      value: `<@${game.hostId}>`,
-      inline: true
-    })
-    .addFields({
-      name: "STATUS",
-      value: count >= game.needed
-        ? "READY"
-        : "WAITING",
-      inline: true
+      name: ready ? "Status" : "Activity check",
+      value: ready
+        ? "Lineup is ready."
+        : "React below to confirm your availability.",
+      inline: false
     })
     .setFooter({
-      text: "Friendly System • Activity Check"
+      text: "Friendly system"
     });
 }
 
-async function updateActivity(interaction) {
-  const game = games.get(interaction.guildId);
-
-  if (!game || !game.activityMessageId) return;
-
+function createLineupEmbed(game) {
   const formation = formations[game.needed];
 
-  const message =
-    await interaction.channel.messages.fetch(
-      game.activityMessageId
-    );
-
-  await message.edit({
-    embeds: [
-      createActivityEmbed(game, formation)
-    ],
-    components: createActivityButtons(
-      game.lineupStarted
-    )
-  });
-
-  if (
-    !interaction.replied &&
-    !interaction.deferred
-  ) {
-    await interaction.deferUpdate();
-  }
-}
-
-async function createLineup(interaction) {
-  const game = games.get(interaction.guildId);
-
-  if (!game || game.lineupMessageId) return;
-
-  game.lineupStarted = true;
-
-  const formation = formations[game.needed];
-
-  const activityMessage =
-    await interaction.channel.messages.fetch(
-      game.activityMessageId
-    );
-
-  await activityMessage.edit({
-    embeds: [
-      createActivityEmbed(game, formation)
-    ],
-    components: createActivityButtons(true)
-  });
-
-  const message =
-    await interaction.channel.send({
-      content:
-        "━━━━━━━━━━━━━━━━━━━━\n" +
-        "**⚽ LINEUP READY**\n" +
-        "━━━━━━━━━━━━━━━━━━━━",
-      embeds: [
-        createLineupEmbed(game, formation)
-      ],
-      components: createPositionButtons(
-        game,
-        formation
-      )
-    });
-
-  game.lineupMessageId = message.id;
-}
-
-function createLineupEmbed(game, formation) {
-  let lineup = "";
+  let description =
+    `**${formation.name}** · ${game.lineup.size}/${formation.positions.length} selected\n\n`;
 
   for (const position of formation.positions) {
     const userId = game.lineup.get(position);
 
-    lineup += userId
-      ? `**${position}**  →  <@${userId}>\n`
-      : `**${position}**  →  \`OPEN\`\n`;
+    description += userId
+      ? `**${position}**  <@${userId}>\n`
+      : `**${position}**  —\n`;
   }
 
-  const filled = game.lineup.size;
-  const total = formation.positions.length;
+  description += "\nSelect a position below. You can change your position.";
 
   return new EmbedBuilder()
-    .setColor(0x151515)
-    .setTitle("⚽  MATCH LINEUP")
-    .setDescription(
-      "━━━━━━━━━━━━━━━━━━━━\n" +
-      `**FORMATION  ${formation.name}**\n` +
-      "━━━━━━━━━━━━━━━━━━━━\n\n" +
-      lineup +
-      "\n━━━━━━━━━━━━━━━━━━━━"
-    )
-    .addFields({
-      name: "POSITIONS",
-      value: `\`${filled}/${total}\` filled`,
-      inline: true
-    })
-    .addFields({
-      name: "FORMATION",
-      value: `\`${formation.name}\``,
-      inline: true
-    })
+    .setColor(0x18181b)
+    .setTitle("Lineup")
+    .setDescription(description)
     .setFooter({
-      text:
-        "Select one position • Host can lock the lineup"
+      text: "One player per position"
     });
 }
 
-function createPositionButtons(game, formation) {
+function createFinalLineupEmbed(game) {
+  const formation = formations[game.needed];
+
+  let description = `**${formation.name}**\n\n`;
+
+  for (const position of formation.positions) {
+    const userId = game.lineup.get(position);
+
+    description += `**${position}**  <@${userId}>\n`;
+  }
+
+  return new EmbedBuilder()
+    .setColor(0x18181b)
+    .setTitle("Lineup Locked")
+    .setDescription(description)
+    .setFooter({
+      text: "Friendly system"
+    });
+}
+
+function createLineupButtons(game) {
+  const formation = formations[game.needed];
   const rows = [];
-  let currentRow = new ActionRowBuilder();
+
+  let row = new ActionRowBuilder();
 
   for (const position of formation.positions) {
     const taken = game.lineup.has(position);
 
     const button = new ButtonBuilder()
       .setCustomId(`position_${position}`)
-      .setLabel(
-        taken
-          ? `✓ ${position}`
-          : position
-      )
-      .setStyle(
-        taken
-          ? ButtonStyle.Secondary
-          : ButtonStyle.Primary
-      )
+      .setLabel(position)
+      .setStyle(taken ? ButtonStyle.Secondary : ButtonStyle.Primary)
       .setDisabled(taken);
 
-    currentRow.addComponents(button);
+    row.addComponents(button);
 
-    if (currentRow.components.length === 5) {
-      rows.push(currentRow);
-      currentRow = new ActionRowBuilder();
+    if (row.components.length === 5) {
+      rows.push(row);
+      row = new ActionRowBuilder();
     }
   }
 
-  if (currentRow.components.length > 0) {
-    rows.push(currentRow);
+  if (row.components.length > 0) {
+    rows.push(row);
   }
 
-  const filled =
+  const complete =
     game.lineup.size === formation.positions.length;
 
-  rows.push(
-    new ActionRowBuilder().addComponents(
-      new ButtonBuilder()
-        .setCustomId("lock_lineup")
-        .setLabel(
-          filled
-            ? "LOCK LINEUP"
-            : `LOCK (${game.lineup.size}/${formation.positions.length})`
-        )
-        .setEmoji("🔒")
-        .setStyle(
-          filled
-            ? ButtonStyle.Success
-            : ButtonStyle.Secondary
-        )
-        .setDisabled(!filled)
-    )
+  const lockRow = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId("lock_lineup")
+      .setLabel(complete ? "LOCK LINEUP" : `LOCK ${game.lineup.size}/${formation.positions.length}`)
+      .setStyle(
+        complete
+          ? ButtonStyle.Success
+          : ButtonStyle.Secondary
+      )
+      .setDisabled(!complete)
   );
+
+  rows.push(lockRow);
 
   return rows;
 }
 
-async function updateLineup(interaction) {
-  const game = games.get(interaction.guildId);
-
-  if (!game || !game.lineupMessageId) return;
-
-  const formation = formations[game.needed];
-
-  const message =
-    await interaction.channel.messages.fetch(
-      game.lineupMessageId
-    );
-
-  await message.edit({
-    embeds: [
-      createLineupEmbed(game, formation)
-    ],
-    components: createPositionButtons(
-      game,
-      formation
-    )
-  });
-}
-
-function createFinalLineupEmbed(game, formation) {
-  let lineup = "";
-
-  for (const position of formation.positions) {
-    const userId = game.lineup.get(position);
-
-    lineup +=
-      `**${position}**  →  <@${userId}>\n`;
-  }
-
-  return new EmbedBuilder()
-    .setColor(0x151515)
-    .setTitle("🔒  LINEUP LOCKED")
-    .setDescription(
-      "━━━━━━━━━━━━━━━━━━━━\n" +
-      `**FORMATION  ${formation.name}**\n` +
-      "━━━━━━━━━━━━━━━━━━━━\n\n" +
-      lineup +
-      "\n━━━━━━━━━━━━━━━━━━━━\n" +
-      "**⚽ GOOD LUCK — HAVE A GOOD GAME**"
-    )
-    .addFields({
-      name: "PLAYERS",
-      value: `\`${formation.positions.length}/${formation.positions.length}\``,
-      inline: true
-    })
-    .addFields({
-      name: "STATUS",
-      value: "🔒 LOCKED",
-      inline: true
-    })
-    .setFooter({
-      text: "Friendly System • Match Ready"
-    });
-}
-
 function getPlayerPosition(game, userId) {
-  for (const [position, id] of game.lineup) {
-    if (id === userId) {
+  for (const [position, playerId] of game.lineup) {
+    if (playerId === userId) {
       return position;
     }
   }
