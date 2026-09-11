@@ -1,15 +1,17 @@
-require("dotenv").config();
-
 const {
   Client,
   GatewayIntentBits,
-  Partials,
-  EmbedBuilder,
+  SlashCommandBuilder,
+  REST,
+  Routes,
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
+  EmbedBuilder,
   PermissionsBitField
 } = require("discord.js");
+
+require("dotenv").config();
 
 const client = new Client({
   intents: [
@@ -17,910 +19,386 @@ const client = new Client({
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent,
     GatewayIntentBits.GuildMembers
-  ],
-  partials: [Partials.Channel]
+  ]
 });
 
+const games = new Map();
 const PREFIX = "?";
-
-const STAFF_ROLES = [
-  "〔✦〕FF Hoster",
-  "〔✦〕Trial Hoster",
-  "〔✦〕Moderator",
-  "〔✦〕Co-Owner",
-  "〔✦〕Manager",
-  "〔✦〕Founder/Owner"
-];
-
-const TEAM_ROLES = {
-  "XI": "〔✦〕STARTING XI/MAIN PLAYERS",
-  "MAIN": "〔✦〕STARTING XI/MAIN PLAYERS",
-  "BENCH": "〔✦〕MAIN TEAM BENCH",
-  "A+": "〔✦〕A+ RESERVE",
-  "A": "〔✦〕A RESERVE",
-  "B+": "〔✦〕B+ RESERVE",
-  "B": "〔✦〕B RESERVE",
-  "C+": "〔✦〕C+ RESERVE",
-  "C": "〔✦〕C RESERVE",
-  "D": "〔✦〕D RESERVE"
-};
 
 const formations = {
   4: {
-    name: "1-2-1",
+    name: "2-1",
     positions: ["GK", "LB", "RB", "ST"]
   },
-
   5: {
-    name: "1-2-1-1",
+    name: "2-1-1",
     positions: ["GK", "LB", "RB", "CAM", "ST"]
   },
-
   6: {
-    name: "1-2-1-2",
-    positions: ["GK", "LB", "RB", "CAM", "LW", "ST"]
+    name: "2-1-2",
+    positions: ["GK", "LB", "RB", "CAM", "LW", "RW"]
   },
-
   7: {
-    name: "3-1-3",
-    positions: ["GK", "LB", "CB", "RB", "CAM", "LW", "ST"]
+    name: "3-1-2",
+    positions: ["GK", "LB", "CB", "RB", "CAM", "LW", "RW"]
   },
-
   8: {
-    name: "3-1-3-1",
+    name: "3-1-3",
     positions: ["GK", "LB", "CB", "RB", "CAM", "LW", "ST", "RW"]
   },
-
   9: {
     name: "3-2-3",
     positions: ["GK", "LB", "CB", "RB", "LCM", "RCM", "LW", "ST", "RW"]
   },
-
   10: {
     name: "4-2-3",
-    positions: [
-      "GK",
-      "LB",
-      "LCB",
-      "RCB",
-      "RB",
-      "LCM",
-      "RCM",
-      "LW",
-      "ST",
-      "RW"
-    ]
+    positions: ["GK", "LB", "LCB", "RCB", "RB", "LCM", "RCM", "LW", "ST", "RW"]
   },
-
   11: {
     name: "4-3-3",
-    positions: [
-      "GK",
-      "LB",
-      "LCB",
-      "RCB",
-      "RB",
-      "LCM",
-      "CAM",
-      "RCM",
-      "LW",
-      "ST",
-      "RW"
-    ]
+    positions: ["GK", "LB", "LCB", "RCB", "RB", "LCM", "CAM", "RCM", "LW", "ST", "RW"]
   }
 };
 
-const games = new Map();
+const command = new SlashCommandBuilder()
+  .setName("friendly")
+  .setDescription("Start a friendly match")
+  .addIntegerOption(option =>
+    option
+      .setName("players")
+      .setDescription("Number of players needed")
+      .setRequired(true)
+      .setMinValue(4)
+      .setMaxValue(11)
+  );
 
-function isStaff(member) {
-  if (!member) return false;
+client.once("ready", async () => {
+  console.log(`${client.user.tag} is online.`);
 
-  if (member.permissions.has(PermissionsBitField.Flags.Administrator)) {
-    return true;
+  try {
+    const rest = new REST({ version: "10" }).setToken(process.env.TOKEN);
+
+    await rest.put(
+      Routes.applicationCommands(client.user.id),
+      {
+        body: [command.toJSON()]
+      }
+    );
+
+    console.log("Slash command registered.");
+  } catch (error) {
+    console.error("Slash registration error:", error);
   }
-
-  return member.roles.cache.some(function(role) {
-    return STAFF_ROLES.includes(role.name);
-  });
-}
-
-function getStaffRoles() {
-  return STAFF_ROLES.map(function(role) {
-    return "- " + role;
-  }).join("\n");
-}
+});
 
 function getGame(guildId) {
   return games.get(guildId);
 }
 
-function deleteGame(guildId) {
-  games.delete(guildId);
-}
+function createActivityEmbed(game) {
+  const formation = formations[game.needed];
 
-function getFormation(players) {
-  return formations[players];
-}
-
-function makeActivityEmbed(game) {
-  const formation = getFormation(game.needed);
-
-  const players = Array.from(game.players);
-
-  let playerList = "Nobody yet";
-
-  if (players.length > 0) {
-    playerList = players
-      .map(function(id, index) {
-        return String(index + 1) + ". <@" + id + ">";
-      })
-      .join("\n");
-  }
-
-  const remaining = Math.max(0, game.needed - players.length);
-
-  let status = "";
-
-  if (players.length >= game.needed) {
-    status = "READY";
-  } else {
-    status = String(players.length) +
-      "/" +
-      String(game.needed) +
-      " PLAYERS";
-  }
+  const players = [...game.players];
 
   return new EmbedBuilder()
-    .setColor(0x202020)
-    .setTitle("FRIENDLY MATCH")
+    .setTitle("FRIENDLY ACTIVITY CHECK")
     .setDescription(
-      "--------------------------------\n" +
-      "ACTIVITY CHECK\n" +
-      "--------------------------------\n\n" +
-      "**STATUS:** " + status + "\n\n" +
-      "**PLAYERS NEEDED:** " + game.needed + "\n" +
-      "**PLAYERS JOINED:** " + players.length + "\n" +
-      "**PLAYERS LEFT:** " + remaining + "\n" +
-      "**FORMATION:** " + formation.name + "\n\n" +
-      "--------------------------------\n" +
-      "PLAYERS\n" +
-      "--------------------------------\n\n" +
-      playerList + "\n\n" +
-      "--------------------------------\n" +
-      "Click CAN PLAY if you are available.\n" +
-      "Click CANT PLAY to remove yourself."
+      `**Players:** ${players.length}/${game.needed}\n` +
+      `**Formation:** ${formation.name}\n\n` +
+      (
+        players.length
+          ? players.map(id => `> <@${id}>`).join("\n")
+          : "> No players yet."
+      )
     )
     .setFooter({
-      text: "Friendly System"
-    })
-    .setTimestamp();
+      text: "Click CAN PLAY if you are available."
+    });
 }
 
-function activityButtons() {
-  return [
-    new ActionRowBuilder().addComponents(
-      new ButtonBuilder()
-        .setCustomId("friendly_can_play")
-        .setLabel("CAN PLAY")
-        .setStyle(ButtonStyle.Success),
+function activityButtons(game) {
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId("friendly_play")
+      .setLabel("CAN PLAY")
+      .setStyle(ButtonStyle.Success),
 
-      new ButtonBuilder()
-        .setCustomId("friendly_cant_play")
-        .setLabel("CANT PLAY")
-        .setStyle(ButtonStyle.Danger),
+    new ButtonBuilder()
+      .setCustomId("friendly_no")
+      .setLabel("CAN'T PLAY")
+      .setStyle(ButtonStyle.Danger),
 
-      new ButtonBuilder()
-        .setCustomId("friendly_cancel")
-        .setLabel("CANCEL")
-        .setStyle(ButtonStyle.Secondary)
-    )
-  ];
+    new ButtonBuilder()
+      .setCustomId("friendly_reset")
+      .setLabel("RESET")
+      .setStyle(ButtonStyle.Secondary)
+  );
 }
 
-function makeLineupEmbed(game) {
-  const formation = getFormation(game.needed);
+function createLineupEmbed(game) {
+  const formation = formations[game.needed];
 
   let text = "";
 
-  formation.positions.forEach(function(position) {
+  for (const position of formation.positions) {
     const player = game.lineup.get(position);
 
-    if (player) {
-      text += "**" + position + "** - <@" + player + ">\n";
-    } else {
-      text += "**" + position + "** - AVAILABLE\n";
-    }
-  });
-
-  let subs = "No substitutes";
-
-  if (game.subs.length > 0) {
-    subs = game.subs
-      .map(function(id, index) {
-        return String(index + 1) + ". <@" + id + ">";
-      })
-      .join("\n");
+    text += `**${position}**\n`;
+    text += player ? `> <@${player}>\n\n` : "> `OPEN`\n\n";
   }
 
   return new EmbedBuilder()
-    .setColor(0x202020)
-    .setTitle("MATCH LINEUP")
-    .setDescription(
-      "--------------------------------\n" +
-      "FORMATION: " + formation.name + "\n" +
-      "--------------------------------\n\n" +
-      text +
-      "\n--------------------------------\n" +
-      "SUBSTITUTES\n" +
-      "--------------------------------\n\n" +
-      subs +
-      "\n\n--------------------------------\n" +
-      "Click a position to claim it.\n" +
-      "Click your position again to leave it."
-    )
+    .setTitle(`LINEUP • ${formation.name}`)
+    .setDescription(text)
     .setFooter({
-      text: "One player can only have one position"
-    })
-    .setTimestamp();
+      text: game.locked
+        ? "LINEUP LOCKED"
+        : game.subMode
+          ? "SUB MODE • Select a player to replace"
+          : "Select a position to join the lineup."
+    });
 }
 
-function lineupButtons(game) {
-  const formation = getFormation(game.needed);
+function createLineupButtons(game) {
+  const formation = formations[game.needed];
   const rows = [];
 
-  let row = new ActionRowBuilder();
+  let currentRow = [];
 
-  formation.positions.forEach(function(position) {
-    const taken = game.lineup.has(position);
+  for (const position of formation.positions) {
+    const player = game.lineup.get(position);
 
     const button = new ButtonBuilder()
-      .setCustomId("position_" + position)
-      .setLabel(position)
-      .setStyle(taken ? ButtonStyle.Secondary : ButtonStyle.Primary);
+      .setCustomId(`position_${position}`)
+      .setLabel(player ? `${position} • ${game.lineup.get(position) === player ? "FILLED" : ""}` : position)
+      .setStyle(
+        game.subMode && player
+          ? ButtonStyle.Danger
+          : player
+            ? ButtonStyle.Success
+            : ButtonStyle.Secondary
+      );
 
-    row.addComponents(button);
+    currentRow.push(button);
 
-    if (row.components.length === 5) {
-      rows.push(row);
-      row = new ActionRowBuilder();
+    if (currentRow.length === 5) {
+      rows.push(new ActionRowBuilder().addComponents(currentRow));
+      currentRow = [];
     }
-  });
-
-  if (row.components.length > 0) {
-    rows.push(row);
   }
 
-  rows.push(
-    new ActionRowBuilder().addComponents(
+  if (currentRow.length) {
+    rows.push(new ActionRowBuilder().addComponents(currentRow));
+  }
+
+  if (!game.locked) {
+    const controlRow = new ActionRowBuilder().addComponents(
       new ButtonBuilder()
-        .setCustomId("join_sub")
-        .setLabel("JOIN AS SUB")
-        .setStyle(ButtonStyle.Success),
+        .setCustomId("sub_mode")
+        .setLabel(game.subMode ? "CANCEL SUB" : "SUB")
+        .setStyle(game.subMode ? ButtonStyle.Danger : ButtonStyle.Primary),
 
       new ButtonBuilder()
-        .setCustomId("leave_sub")
-        .setLabel("LEAVE SUBS")
-        .setStyle(ButtonStyle.Secondary),
+        .setCustomId("lock_lineup")
+        .setLabel("LOCK LINEUP")
+        .setStyle(ButtonStyle.Success)
+    );
 
-      new ButtonBuilder()
-        .setCustomId("finish_friendly")
-        .setLabel("FINISH")
-        .setStyle(ButtonStyle.Danger)
-    )
-  );
+    rows.push(controlRow);
+  }
 
   return rows;
 }
 
-async function updateActivityMessage(game) {
-  try {
-    const channel = await client.channels.fetch(game.channelId);
-
-    if (!channel) return;
-
-    const message = await channel.messages.fetch(game.activityMessageId);
-
-    if (!message) return;
-
-    await message.edit({
-      embeds: [makeActivityEmbed(game)],
-      components: activityButtons()
-    });
-  } catch (error) {
-    game.activityMessageId = null;
-  }
-}
-
-async function updateLineupMessage(game) {
-  try {
-    if (!game.lineupMessageId) return;
-
-    const channel = await client.channels.fetch(game.channelId);
-
-    if (!channel) return;
-
-    const message = await channel.messages.fetch(game.lineupMessageId);
-
-    if (!message) return;
-
-    await message.edit({
-      embeds: [makeLineupEmbed(game)],
-      components: lineupButtons(game)
-    });
-  } catch (error) {
-    game.lineupMessageId = null;
-  }
-}
-
-async function createLineup(channel, game) {
-  if (game.lineupMessageId) return;
-
-  const message = await channel.send({
-    content: "LINEUP IS NOW OPEN",
-    embeds: [makeLineupEmbed(game)],
-    components: lineupButtons(game)
-  });
-
-  game.lineupMessageId = message.id;
-}
-
-function userPosition(game, userId) {
-  for (const entry of game.lineup.entries()) {
-    const position = entry[0];
-    const player = entry[1];
-
-    if (player === userId) {
-      return position;
+client.on("messageDelete", message => {
+  for (const [guildId, game] of games) {
+    if (
+      message.id === game.activityMessageId ||
+      message.id === game.lineupMessageId
+    ) {
+      games.delete(guildId);
+      console.log("Friendly removed because a system message was deleted.");
+      break;
     }
   }
-
-  return null;
-}
-
-function removePlayerFromLineup(game, userId) {
-  const position = userPosition(game, userId);
-
-  if (position) {
-    game.lineup.delete(position);
-  }
-
-  const subIndex = game.subs.indexOf(userId);
-
-  if (subIndex !== -1) {
-    game.subs.splice(subIndex, 1);
-  }
-}
-
-function cleanDeletedGame(game) {
-  if (!game) return;
-
-  if (!game.channelId) return;
-
-  if (!game.activityMessageId) {
-    deleteGame(game.guildId);
-  }
-}
-
-client.once("ready", function() {
-  console.log("Logged in as " + client.user.tag);
-  console.log("Friendly bot is online.");
 });
 
-client.on("messageCreate", async function(message) {
+client.on("messageCreate", async message => {
+  if (message.author.bot) return;
+  if (!message.guild) return;
+  if (!message.content.startsWith(PREFIX)) return;
+
+  const args = message.content
+    .slice(PREFIX.length)
+    .trim()
+    .split(/\s+/);
+
+  const commandName = args.shift()?.toLowerCase();
+
+  if (!commandName) return;
+
   try {
-    if (!message.guild) return;
-    if (message.author.bot) return;
-
-    if (!message.content.startsWith(PREFIX)) return;
-
-    const args = message.content
-      .slice(PREFIX.length)
-      .trim()
-      .split(/\s+/);
-
-    const command = args.shift().toLowerCase();
-
-    if (command === "help") {
+    if (commandName === "help" || commandName === "commands") {
       const embed = new EmbedBuilder()
-        .setColor(0x202020)
         .setTitle("BOT COMMANDS")
         .setDescription(
-          "--------------------------------\n" +
-          "FRIENDLY COMMANDS\n" +
-          "--------------------------------\n\n" +
-          "`?friendly <4-11>` - Start a friendly\n" +
-          "`?cancel` - Cancel active friendly\n" +
-          "`?status` - Show friendly status\n" +
-          "`?lineup` - Show current lineup\n\n" +
-          "--------------------------------\n" +
-          "MODERATION\n" +
-          "--------------------------------\n\n" +
-          "`?purge <amount>` - Delete messages\n" +
-          "`?kick @user [reason]`\n" +
-          "`?ban @user [reason]`\n" +
-          "`?unban <userId>`\n" +
-          "`?timeout @user <minutes>`\n" +
-          "`?untimeout @user`\n\n" +
-          "--------------------------------\n" +
-          "SERVER\n" +
-          "--------------------------------\n\n" +
-          "`?teamrank <rank>`\n" +
-          "`?userinfo [@user]`\n" +
-          "`?serverinfo`\n" +
-          "`?avatar [@user]`\n" +
-          "`?roleinfo <role>`\n" +
-          "`?members`\n" +
-          "`?roles`\n\n" +
-          "--------------------------------\n" +
-          "UTILITY\n" +
-          "--------------------------------\n\n" +
-          "`?ping`\n" +
-          "`?botinfo`\n" +
-          "`?say <text>`\n" +
-          "`?embed <text>`\n" +
-          "`?coinflip`\n" +
-          "`?8ball <question>`\n" +
-          "`?staff`\n\n" +
-          "Staff-only commands require an allowed staff role."
+          [
+            "**FRIENDLY**",
+            "`/friendly <players>` — start a friendly",
+            "",
+            "**MODERATION**",
+            "`?purge <amount>` — delete messages",
+            "`?clear <amount>` — delete messages",
+            "`?kick @user [reason]` — kick a member",
+            "`?ban @user [reason]` — ban a member",
+            "`?unban <userID>` — unban a user",
+            "`?timeout @user <minutes>` — timeout a member",
+            "`?untimeout @user` — remove timeout",
+            "`?warn @user [reason]` — warn a member",
+            "`?lock` — lock the channel",
+            "`?unlock` — unlock the channel",
+            "`?slowmode <seconds>` — set slowmode",
+            "",
+            "**SERVER**",
+            "`?teamrank XI` — show Starting XI",
+            "`?membercount` — show member count",
+            "`?serverinfo` — server information",
+            "`?userinfo [@user]` — user information",
+            "`?avatar [@user]` — show avatar",
+            "",
+            "**UTILITY**",
+            "`?ping` — bot latency",
+            "`?say <message>` — send a message",
+            "`?announce <message>` — announcement",
+            "`?poll <question>` — create a poll",
+            "`?botinfo` — bot information"
+          ].join("\n")
         )
-        .setTimestamp();
+        .setColor(0x111111);
 
-      await message.reply({
-        embeds: [embed]
-      });
-
-      return;
+      return message.reply({ embeds: [embed] });
     }
 
-    if (command === "ping") {
-      await message.reply("Pong: " + client.ws.ping + "ms");
-      return;
-    }
-
-    if (command === "botinfo") {
-      const embed = new EmbedBuilder()
-        .setColor(0x202020)
-        .setTitle("BOT INFORMATION")
-        .setDescription(
-          "**NAME:** " + client.user.username + "\n" +
-          "**SERVERS:** " + client.guilds.cache.size + "\n" +
-          "**PING:** " + client.ws.ping + "ms\n" +
-          "**PREFIX:** " + PREFIX
-        );
-
-      await message.reply({
-        embeds: [embed]
-      });
-
-      return;
-    }
-
-    if (command === "avatar") {
-      const user = message.mentions.users.first() || message.author;
-
-      const embed = new EmbedBuilder()
-        .setColor(0x202020)
-        .setTitle(user.username + " AVATAR")
-        .setImage(user.displayAvatarURL({
-          size: 1024
-        }));
-
-      await message.reply({
-        embeds: [embed]
-      });
-
-      return;
-    }
-
-    if (command === "userinfo") {
-      const member =
-        message.mentions.members.first() ||
-        message.member;
-
-      const embed = new EmbedBuilder()
-        .setColor(0x202020)
-        .setTitle("USER INFORMATION")
-        .setDescription(
-          "**USER:** " + member.user.tag + "\n" +
-          "**ID:** " + member.id + "\n" +
-          "**JOINED:** <t:" +
-          Math.floor(member.joinedTimestamp / 1000) +
-          ":R>\n" +
-          "**ACCOUNT CREATED:** <t:" +
-          Math.floor(member.user.createdTimestamp / 1000) +
-          ":R>"
+    if (commandName === "purge" || commandName === "clear") {
+      if (
+        !message.member.permissions.has(
+          PermissionsBitField.Flags.ManageMessages
         )
-        .setThumbnail(member.user.displayAvatarURL());
-
-      await message.reply({
-        embeds: [embed]
-      });
-
-      return;
-    }
-
-    if (command === "serverinfo") {
-      const guild = message.guild;
-
-      const embed = new EmbedBuilder()
-        .setColor(0x202020)
-        .setTitle("SERVER INFORMATION")
-        .setDescription(
-          "**NAME:** " + guild.name + "\n" +
-          "**ID:** " + guild.id + "\n" +
-          "**MEMBERS:** " + guild.memberCount + "\n" +
-          "**CHANNELS:** " + guild.channels.cache.size + "\n" +
-          "**ROLES:** " + guild.roles.cache.size + "\n" +
-          "**OWNER:** <@" + guild.ownerId + ">"
-        );
-
-      if (guild.iconURL()) {
-        embed.setThumbnail(guild.iconURL());
+      ) {
+        return message.reply("You need **Manage Messages**.");
       }
 
-      await message.reply({
-        embeds: [embed]
-      });
+      const amount = parseInt(args[0]);
 
-      return;
-    }
-
-    if (command === "members") {
-      await message.reply(
-        "This server has " +
-        message.guild.memberCount +
-        " members."
-      );
-
-      return;
-    }
-
-    if (command === "roles") {
-      const roles = message.guild.roles.cache
-        .filter(function(role) {
-          return role.name !== "@everyone";
-        })
-        .map(function(role) {
-          return role.name;
-        })
-        .slice(0, 50);
-
-      const embed = new EmbedBuilder()
-        .setColor(0x202020)
-        .setTitle("SERVER ROLES")
-        .setDescription(
-          roles.length > 0
-            ? roles.join("\n")
-            : "No roles found."
-        );
-
-      await message.reply({
-        embeds: [embed]
-      });
-
-      return;
-    }
-
-    if (command === "coinflip") {
-      const result = Math.random() < 0.5
-        ? "HEADS"
-        : "TAILS";
-
-      await message.reply("Coinflip: " + result);
-      return;
-    }
-
-    if (command === "8ball") {
-      if (!args.length) {
-        await message.reply("Ask a question.");
-        return;
+      if (!amount || amount < 1 || amount > 100) {
+        return message.reply("Use an amount between **1 and 100**.");
       }
 
-      const answers = [
-        "Yes.",
-        "No.",
-        "Probably.",
-        "Probably not.",
-        "Definitely.",
-        "I would not count on it.",
-        "Maybe."
-      ];
+      try {
+        const deleted = await message.channel.bulkDelete(amount + 1, true);
 
-      const answer =
-        answers[Math.floor(Math.random() * answers.length)];
+        const msg = await message.channel.send(
+          `Deleted **${Math.max(deleted.size - 1, 0)}** messages.`
+        );
 
-      await message.reply(answer);
+        setTimeout(() => {
+          msg.delete().catch(() => {});
+        }, 3000);
+      } catch {
+        return message.reply(
+          "I couldn't delete those messages. Messages older than 14 days cannot be bulk deleted."
+        );
+      }
+
       return;
     }
 
-    if (command === "teamrank") {
-      const rank = args.join(" ").toUpperCase();
+    if (commandName === "teamrank") {
+      const rank = args.join(" ").toLowerCase();
 
       if (!rank) {
-        await message.reply(
-          "Usage: ?teamrank XI\n" +
-          "Available: XI, MAIN, BENCH, A+, A, B+, B, C+, C, D"
+        return message.reply(
+          "Use `?teamrank XI`."
         );
-
-        return;
       }
 
-      const roleName = TEAM_ROLES[rank];
-
-      if (!roleName) {
-        await message.reply(
-          "Unknown rank. Try: XI, MAIN, BENCH, A+, A, B+, B, C+, C or D."
+      if (rank !== "xi" && rank !== "starting xi" && rank !== "main") {
+        return message.reply(
+          "Available rank: `XI`"
         );
-
-        return;
       }
 
-      const role = message.guild.roles.cache.find(function(r) {
-        return r.name === roleName;
-      });
+      const roleName = "〔✦〕STARTING XI/MAIN PLAYERS";
+
+      const role = message.guild.roles.cache.find(
+        r => r.name === roleName
+      );
 
       if (!role) {
-        await message.reply(
-          "The role `" + roleName + "` was not found."
+        return message.reply(
+          `I couldn't find the role **${roleName}**.`
         );
-
-        return;
       }
 
-      const members = role.members.map(function(member) {
-        return "<@" + member.id + ">";
-      });
+      await message.guild.members.fetch();
+
+      const members = role.members;
+
+      if (!members.size) {
+        return message.reply(
+          `Nobody currently has the **${roleName}** role.`
+        );
+      }
+
+      const sortedMembers = [...members.values()]
+        .sort((a, b) =>
+          a.displayName.localeCompare(b.displayName)
+        );
+
+      const playerList = sortedMembers
+        .map(
+          (member, index) =>
+            `**${index + 1}.** <@${member.id}>`
+        )
+        .join("\n");
 
       const embed = new EmbedBuilder()
-        .setColor(0x202020)
-        .setTitle(roleName)
+        .setTitle("STARTING XI")
         .setDescription(
-          "**PLAYERS:** " + members.length + "\n\n" +
-          (members.length > 0
-            ? members.join("\n")
-            : "No players have this role.")
-        );
+          `**Rank:** XI\n` +
+          `**Players:** ${members.size}\n\n` +
+          playerList
+        )
+        .setFooter({
+          text: roleName
+        })
+        .setColor(0x111111);
 
-      await message.reply({
+      return message.channel.send({
         embeds: [embed]
       });
-
-      return;
     }
 
-    if (!isStaff(message.member)) {
-      return;
-    }
-
-    if (command === "staff") {
-      const embed = new EmbedBuilder()
-        .setColor(0x202020)
-        .setTitle("ALLOWED STAFF ROLES")
-        .setDescription(getStaffRoles());
-
-      await message.reply({
-        embeds: [embed]
-      });
-
-      return;
-    }
-
-    if (command === "friendly") {
-      const amount = Number(args[0]);
-
+    if (commandName === "kick") {
       if (
-        !Number.isInteger(amount) ||
-        amount < 4 ||
-        amount > 11
+        !message.member.permissions.has(
+          PermissionsBitField.Flags.KickMembers
+        )
       ) {
-        await message.reply(
-          "Usage: ?friendly <4-11>"
-        );
-
-        return;
+        return message.reply("You need **Kick Members**.");
       }
 
-      const oldGame = getGame(message.guild.id);
-
-      if (oldGame) {
-        if (oldGame.activityMessageId) {
-          try {
-            const oldChannel =
-              await client.channels.fetch(oldGame.channelId);
-
-            if (oldChannel) {
-              await oldChannel.messages.fetch(
-                oldGame.activityMessageId
-              );
-            }
-
-            await message.reply(
-              "There is already an active friendly."
-            );
-
-            return;
-          } catch (error) {
-            deleteGame(message.guild.id);
-          }
-        } else {
-          deleteGame(message.guild.id);
-        }
-      }
-
-      const game = {
-        guildId: message.guild.id,
-        channelId: message.channel.id,
-        needed: amount,
-        players: new Set(),
-        lineup: new Map(),
-        subs: [],
-        activityMessageId: null,
-        lineupMessageId: null,
-        hostId: message.author.id
-      };
-
-      games.set(message.guild.id, game);
-
-      const sent = await message.channel.send({
-        content: "@everyone",
-        embeds: [makeActivityEmbed(game)],
-        components: activityButtons(),
-        allowedMentions: {
-          parse: ["everyone"]
-        }
-      });
-
-      game.activityMessageId = sent.id;
-
-      await message.delete().catch(function() {});
-
-      return;
-    }
-
-    if (command === "cancel") {
-      const game = getGame(message.guild.id);
-
-      if (!game) {
-        await message.reply(
-          "There is no active friendly."
-        );
-
-        return;
-      }
-
-      deleteGame(message.guild.id);
-
-      await message.reply(
-        "The friendly has been cancelled."
-      );
-
-      return;
-    }
-
-    if (command === "status") {
-      const game = getGame(message.guild.id);
-
-      if (!game) {
-        await message.reply(
-          "There is no active friendly."
-        );
-
-        return;
-      }
-
-      await message.reply({
-        embeds: [makeActivityEmbed(game)]
-      });
-
-      return;
-    }
-
-    if (command === "lineup") {
-      const game = getGame(message.guild.id);
-
-      if (!game) {
-        await message.reply(
-          "There is no active friendly."
-        );
-
-        return;
-      }
-
-      await message.reply({
-        embeds: [makeLineupEmbed(game)]
-      });
-
-      return;
-    }
-
-    if (command === "purge") {
-      const amount = Number(args[0]);
-
-      if (
-        !Number.isInteger(amount) ||
-        amount < 1 ||
-        amount > 100
-      ) {
-        await message.reply(
-          "Usage: ?purge <1-100>"
-        );
-
-        return;
-      }
-
-      await message.channel.bulkDelete(
-        amount + 1,
-        true
-      );
-
-      const confirmation =
-        await message.channel.send(
-          "Deleted " + amount + " messages."
-        );
-
-      setTimeout(function() {
-        confirmation.delete().catch(function() {});
-      }, 3000);
-
-      return;
-    }
-
-    if (command === "say") {
-      const text = args.join(" ");
-
-      if (!text) {
-        await message.reply(
-          "Usage: ?say <text>"
-        );
-
-        return;
-      }
-
-      await message.delete().catch(function() {});
-      await message.channel.send(text);
-
-      return;
-    }
-
-    if (command === "embed") {
-      const text = args.join(" ");
-
-      if (!text) {
-        await message.reply(
-          "Usage: ?embed <text>"
-        );
-
-        return;
-      }
-
-      const embed = new EmbedBuilder()
-        .setColor(0x202020)
-        .setDescription(text);
-
-      await message.channel.send({
-        embeds: [embed]
-      });
-
-      return;
-    }
-
-    if (command === "kick") {
-      const member = message.mentions.members.first();
+      const member =
+        message.mentions.members.first();
 
       if (!member) {
-        await message.reply(
-          "Mention a user to kick."
-        );
-
-        return;
+        return message.reply("Mention someone to kick.");
       }
 
       if (!member.kickable) {
-        await message.reply(
-          "I cannot kick that member."
+        return message.reply(
+          "I can't kick that member. Check my role hierarchy and permissions."
         );
-
-        return;
       }
 
       const reason =
@@ -928,393 +406,792 @@ client.on("messageCreate", async function(message) {
 
       await member.kick(reason);
 
-      await message.reply(
-        member.user.tag + " was kicked."
+      return message.reply(
+        `Kicked **${member.user.tag}**.`
       );
-
-      return;
     }
 
-    if (command === "ban") {
-      const member = message.mentions.members.first();
+    if (commandName === "ban") {
+      if (
+        !message.member.permissions.has(
+          PermissionsBitField.Flags.BanMembers
+        )
+      ) {
+        return message.reply("You need **Ban Members**.");
+      }
+
+      const member =
+        message.mentions.members.first();
 
       if (!member) {
-        await message.reply(
-          "Mention a user to ban."
-        );
-
-        return;
+        return message.reply("Mention someone to ban.");
       }
 
       if (!member.bannable) {
-        await message.reply(
-          "I cannot ban that member."
+        return message.reply(
+          "I can't ban that member. Check my role hierarchy and permissions."
         );
-
-        return;
       }
 
       const reason =
         args.slice(1).join(" ") || "No reason provided";
 
-      await member.ban({
-        reason: reason
-      });
+      await member.ban({ reason });
 
-      await message.reply(
-        member.user.tag + " was banned."
+      return message.reply(
+        `Banned **${member.user.tag}**.`
       );
-
-      return;
     }
 
-    if (command === "unban") {
-      const id = args[0];
-
-      if (!id) {
-        await message.reply(
-          "Usage: ?unban <userId>"
-        );
-
-        return;
+    if (commandName === "unban") {
+      if (
+        !message.member.permissions.has(
+          PermissionsBitField.Flags.BanMembers
+        )
+      ) {
+        return message.reply("You need **Ban Members**.");
       }
 
-      try {
-        await message.guild.members.unban(id);
+      const userId = args[0];
 
-        await message.reply(
-          "User was unbanned."
-        );
-      } catch (error) {
-        await message.reply(
-          "I could not unban that user."
+      if (!userId) {
+        return message.reply(
+          "Use `?unban <userID>`."
         );
       }
 
-      return;
+      await message.guild.members.unban(userId);
+
+      return message.reply(
+        `Unbanned **${userId}**.`
+      );
     }
 
-    if (command === "timeout") {
-      const member = message.mentions.members.first();
-      const minutes = Number(args[1]);
+    if (commandName === "timeout") {
+      if (
+        !message.member.permissions.has(
+          PermissionsBitField.Flags.ModerateMembers
+        )
+      ) {
+        return message.reply("You need **Moderate Members**.");
+      }
 
-      if (!member || !Number.isInteger(minutes)) {
-        await message.reply(
-          "Usage: ?timeout @user <minutes>"
+      const member =
+        message.mentions.members.first();
+
+      const minutes = parseInt(args[1]);
+
+      if (!member || !minutes || minutes < 1) {
+        return message.reply(
+          "Use `?timeout @user <minutes>`."
         );
-
-        return;
       }
 
       if (!member.moderatable) {
-        await message.reply(
-          "I cannot timeout that member."
+        return message.reply(
+          "I can't timeout that member."
         );
-
-        return;
       }
 
       await member.timeout(
         minutes * 60 * 1000,
-        "Timeout command"
+        "Timed out by moderator"
       );
 
-      await message.reply(
-        member.user.tag +
-        " was timed out for " +
-        minutes +
-        " minutes."
+      return message.reply(
+        `Timed out **${member.user.tag}** for **${minutes} minutes**.`
       );
-
-      return;
     }
 
-    if (command === "untimeout") {
-      const member = message.mentions.members.first();
+    if (commandName === "untimeout") {
+      if (
+        !message.member.permissions.has(
+          PermissionsBitField.Flags.ModerateMembers
+        )
+      ) {
+        return message.reply("You need **Moderate Members**.");
+      }
+
+      const member =
+        message.mentions.members.first();
 
       if (!member) {
-        await message.reply(
-          "Mention a user."
+        return message.reply(
+          "Use `?untimeout @user`."
         );
-
-        return;
       }
 
       await member.timeout(null);
 
-      await message.reply(
-        member.user.tag +
-        " timeout was removed."
+      return message.reply(
+        `Removed timeout from **${member.user.tag}**.`
       );
-
-      return;
     }
 
-    if (command === "roleinfo") {
-      const name = args.join(" ");
-
-      if (!name) {
-        await message.reply(
-          "Usage: ?roleinfo <role name>"
-        );
-
-        return;
+    if (commandName === "warn") {
+      if (
+        !message.member.permissions.has(
+          PermissionsBitField.Flags.ModerateMembers
+        )
+      ) {
+        return message.reply("You need **Moderate Members**.");
       }
 
-      const role = message.guild.roles.cache.find(function(r) {
-        return r.name.toLowerCase() === name.toLowerCase();
-      });
+      const member =
+        message.mentions.members.first();
 
-      if (!role) {
-        await message.reply(
-          "Role not found."
+      if (!member) {
+        return message.reply(
+          "Use `?warn @user [reason]`."
         );
+      }
 
-        return;
+      const reason =
+        args.slice(1).join(" ") || "No reason provided";
+
+      return message.channel.send(
+        `**Warning issued**\n<@${member.id}>\nReason: **${reason}**`
+      );
+    }
+
+    if (commandName === "slowmode") {
+      if (
+        !message.member.permissions.has(
+          PermissionsBitField.Flags.ManageChannels
+        )
+      ) {
+        return message.reply("You need **Manage Channels**.");
+      }
+
+      const seconds = parseInt(args[0]);
+
+      if (
+        isNaN(seconds) ||
+        seconds < 0 ||
+        seconds > 21600
+      ) {
+        return message.reply(
+          "Use a value between **0 and 21600** seconds."
+        );
+      }
+
+      await message.channel.setRateLimitPerUser(seconds);
+
+      return message.reply(
+        `Slowmode set to **${seconds}s**.`
+      );
+    }
+
+    if (commandName === "lock") {
+      if (
+        !message.member.permissions.has(
+          PermissionsBitField.Flags.ManageChannels
+        )
+      ) {
+        return message.reply("You need **Manage Channels**.");
+      }
+
+      await message.channel.permissionOverwrites.edit(
+        message.guild.roles.everyone,
+        {
+          SendMessages: false
+        }
+      );
+
+      return message.reply("Channel locked.");
+    }
+
+    if (commandName === "unlock") {
+      if (
+        !message.member.permissions.has(
+          PermissionsBitField.Flags.ManageChannels
+        )
+      ) {
+        return message.reply("You need **Manage Channels**.");
+      }
+
+      await message.channel.permissionOverwrites.edit(
+        message.guild.roles.everyone,
+        {
+          SendMessages: null
+        }
+      );
+
+      return message.reply("Channel unlocked.");
+    }
+
+    if (commandName === "ping") {
+      return message.reply(
+        `Pong **${client.ws.ping}ms**.`
+      );
+    }
+
+    if (commandName === "userinfo") {
+      const member =
+        message.mentions.members.first() ||
+        message.member;
+
+      const roles = member.roles.cache
+        .filter(role => role.id !== message.guild.id)
+        .map(role => role.toString())
+        .join(", ") || "None";
+
+      const embed = new EmbedBuilder()
+        .setTitle("USER INFORMATION")
+        .setThumbnail(member.user.displayAvatarURL())
+        .addFields(
+          {
+            name: "User",
+            value: member.user.tag,
+            inline: true
+          },
+          {
+            name: "ID",
+            value: member.id,
+            inline: true
+          },
+          {
+            name: "Joined",
+            value: `<t:${Math.floor(
+              member.joinedTimestamp / 1000
+            )}:R>`,
+            inline: true
+          },
+          {
+            name: "Roles",
+            value: roles.slice(0, 1024)
+          }
+        )
+        .setColor(0x111111);
+
+      return message.channel.send({
+        embeds: [embed]
+      });
+    }
+
+    if (commandName === "serverinfo") {
+      const owner = await message.guild.fetchOwner();
+
+      const embed = new EmbedBuilder()
+        .setTitle("SERVER INFORMATION")
+        .addFields(
+          {
+            name: "Server",
+            value: message.guild.name,
+            inline: true
+          },
+          {
+            name: "Members",
+            value: `${message.guild.memberCount}`,
+            inline: true
+          },
+          {
+            name: "Channels",
+            value: `${message.guild.channels.cache.size}`,
+            inline: true
+          },
+          {
+            name: "Roles",
+            value: `${message.guild.roles.cache.size}`,
+            inline: true
+          },
+          {
+            name: "Owner",
+            value: `<@${owner.id}>`,
+            inline: true
+          },
+          {
+            name: "Created",
+            value: `<t:${Math.floor(
+              message.guild.createdTimestamp / 1000
+            )}:R>`,
+            inline: true
+          }
+        )
+        .setColor(0x111111);
+
+      return message.channel.send({
+        embeds: [embed]
+      });
+    }
+
+    if (commandName === "avatar") {
+      const user =
+        message.mentions.users.first() ||
+        message.author;
+
+      const embed = new EmbedBuilder()
+        .setTitle(`${user.username}'s Avatar`)
+        .setImage(user.displayAvatarURL({ size: 1024 }))
+        .setColor(0x111111);
+
+      return message.channel.send({
+        embeds: [embed]
+      });
+    }
+
+    if (commandName === "say") {
+      if (
+        !message.member.permissions.has(
+          PermissionsBitField.Flags.ManageMessages
+        )
+      ) {
+        return message.reply("You need **Manage Messages**.");
+      }
+
+      const text = args.join(" ");
+
+      if (!text) {
+        return message.reply(
+          "Use `?say <message>`."
+        );
+      }
+
+      await message.delete().catch(() => {});
+
+      return message.channel.send(text);
+    }
+
+    if (commandName === "announce") {
+      if (
+        !message.member.permissions.has(
+          PermissionsBitField.Flags.ManageMessages
+        )
+      ) {
+        return message.reply("You need **Manage Messages**.");
+      }
+
+      const text = args.join(" ");
+
+      if (!text) {
+        return message.reply(
+          "Use `?announce <message>`."
+        );
       }
 
       const embed = new EmbedBuilder()
-        .setColor(0x202020)
-        .setTitle("ROLE INFORMATION")
-        .setDescription(
-          "**NAME:** " + role.name + "\n" +
-          "**ID:** " + role.id + "\n" +
-          "**MEMBERS:** " + role.members.size
-        );
+        .setTitle("ANNOUNCEMENT")
+        .setDescription(text)
+        .setFooter({
+          text: `Posted by ${message.author.tag}`
+        })
+        .setColor(0x111111);
 
-      await message.reply({
+      return message.channel.send({
+        embeds: [embed]
+      });
+    }
+
+    if (commandName === "poll") {
+      if (
+        !message.member.permissions.has(
+          PermissionsBitField.Flags.ManageMessages
+        )
+      ) {
+        return message.reply("You need **Manage Messages**.");
+      }
+
+      const question = args.join(" ");
+
+      if (!question) {
+        return message.reply(
+          "Use `?poll <question>`."
+        );
+      }
+
+      const embed = new EmbedBuilder()
+        .setTitle("POLL")
+        .setDescription(question)
+        .setFooter({
+          text: `Poll by ${message.author.tag}`
+        })
+        .setColor(0x111111);
+
+      const poll = await message.channel.send({
         embeds: [embed]
       });
 
+      await poll.react("👍");
+      await poll.react("👎");
+
       return;
     }
-  } catch (error) {
-    console.error("COMMAND ERROR:", error);
 
-    message.reply(
-      "An error occurred while running that command."
-    ).catch(function() {});
+    if (commandName === "membercount") {
+      return message.reply(
+        `This server has **${message.guild.memberCount}** members.`
+      );
+    }
+
+    if (commandName === "botinfo") {
+      const uptime = Math.floor(
+        client.uptime / 1000
+      );
+
+      return message.reply(
+        `**${client.user.tag}**\n` +
+        `Servers: **${client.guilds.cache.size}**\n` +
+        `Ping: **${client.ws.ping}ms**\n` +
+        `Uptime: **${uptime}s**`
+      );
+    }
+  } catch (error) {
+    console.error("Prefix command error:", error);
+
+    return message.reply(
+      "Something went wrong while running that command."
+    ).catch(() => {});
   }
 });
 
-client.on("interactionCreate", async function(interaction) {
-  if (!interaction.isButton()) return;
-
+client.on("interactionCreate", async interaction => {
   try {
-    const game = getGame(interaction.guild.id);
+    if (interaction.isChatInputCommand()) {
+      if (interaction.commandName !== "friendly") return;
 
-    if (!game) {
+      const guildId = interaction.guildId;
+
+      const oldGame = games.get(guildId);
+
+      if (oldGame) {
+        let oldActivityExists = false;
+        let oldLineupExists = false;
+
+        try {
+          await interaction.channel.messages.fetch(
+            oldGame.activityMessageId
+          );
+          oldActivityExists = true;
+        } catch {}
+
+        if (oldGame.lineupMessageId) {
+          try {
+            await interaction.channel.messages.fetch(
+              oldGame.lineupMessageId
+            );
+            oldLineupExists = true;
+          } catch {}
+        }
+
+        if (oldActivityExists || oldLineupExists) {
+          return interaction.reply({
+            content:
+              "There is already an active friendly in this server.",
+            ephemeral: true
+          });
+        }
+
+        games.delete(guildId);
+      }
+
+      const needed =
+        interaction.options.getInteger("players");
+
+      const game = {
+        hostId: interaction.user.id,
+        needed,
+        channelId: interaction.channelId,
+        activityMessageId: null,
+        lineupMessageId: null,
+        players: new Set(),
+        lineup: new Map(),
+        lineupStarted: false,
+        locked: false,
+        subMode: false
+      };
+
+      games.set(guildId, game);
+
+      const formation = formations[needed];
+
+      const activity = await interaction.channel.send({
+        content: "@everyone",
+        embeds: [createActivityEmbed(game)],
+        components: [activityButtons(game)]
+      });
+
+      game.activityMessageId = activity.id;
+
       await interaction.reply({
-        content: "There is no active friendly.",
+        content: "Friendly created.",
         ephemeral: true
       });
 
       return;
     }
 
-    if (interaction.customId === "friendly_can_play") {
-      if (game.players.has(interaction.user.id)) {
-        await interaction.reply({
-          content: "You are already marked as available.",
-          ephemeral: true
-        });
+    if (!interaction.isButton()) return;
 
-        return;
-      }
+    const game = games.get(interaction.guildId);
 
-      game.players.add(interaction.user.id);
-
-      await interaction.deferUpdate();
-
-      await updateActivityMessage(game);
-
-      if (game.players.size >= game.needed) {
-        await createLineup(interaction.channel, game);
-      }
-
-      return;
-    }
-
-    if (interaction.customId === "friendly_cant_play") {
-      game.players.delete(interaction.user.id);
-
-      removePlayerFromLineup(
-        game,
-        interaction.user.id
-      );
-
-      await interaction.deferUpdate();
-
-      await updateActivityMessage(game);
-      await updateLineupMessage(game);
-
-      return;
-    }
-
-    if (interaction.customId === "friendly_cancel") {
-      if (!isStaff(interaction.member)) {
-        await interaction.reply({
-          content: "Only staff can cancel the friendly.",
-          ephemeral: true
-        });
-
-        return;
-      }
-
-      deleteGame(interaction.guild.id);
-
-      await interaction.update({
-        content: "FRIENDLY CANCELLED",
-        embeds: [],
-        components: []
+    if (!game) {
+      return interaction.reply({
+        content: "This friendly is no longer active.",
+        ephemeral: true
       });
-
-      return;
-    }
-
-    if (interaction.customId === "finish_friendly") {
-      if (!isStaff(interaction.member)) {
-        await interaction.reply({
-          content: "Only staff can finish the friendly.",
-          ephemeral: true
-        });
-
-        return;
-      }
-
-      deleteGame(interaction.guild.id);
-
-      await interaction.update({
-        content: "FRIENDLY FINISHED",
-        embeds: [],
-        components: []
-      });
-
-      return;
-    }
-
-    if (interaction.customId === "join_sub") {
-      if (!game.players.has(interaction.user.id)) {
-        await interaction.reply({
-          content: "You must join the activity check first.",
-          ephemeral: true
-        });
-
-        return;
-      }
-
-      const position = userPosition(
-        game,
-        interaction.user.id
-      );
-
-      if (position) {
-        await interaction.reply({
-          content:
-            "Leave your current position before joining substitutes.",
-          ephemeral: true
-        });
-
-        return;
-      }
-
-      if (game.subs.includes(interaction.user.id)) {
-        await interaction.reply({
-          content: "You are already a substitute.",
-          ephemeral: true
-        });
-
-        return;
-      }
-
-      game.subs.push(interaction.user.id);
-
-      await interaction.deferUpdate();
-      await updateLineupMessage(game);
-
-      return;
-    }
-
-    if (interaction.customId === "leave_sub") {
-      const index = game.subs.indexOf(
-        interaction.user.id
-      );
-
-      if (index === -1) {
-        await interaction.reply({
-          content: "You are not a substitute.",
-          ephemeral: true
-        });
-
-        return;
-      }
-
-      game.subs.splice(index, 1);
-
-      await interaction.deferUpdate();
-      await updateLineupMessage(game);
-
-      return;
     }
 
     if (
-      interaction.customId.startsWith("position_")
+      interaction.message.id !== game.activityMessageId &&
+      interaction.message.id !== game.lineupMessageId
     ) {
+      return interaction.reply({
+        content: "This friendly is no longer active.",
+        ephemeral: true
+      });
+    }
+
+    if (interaction.customId === "friendly_play") {
+      game.players.add(interaction.user.id);
+
+      const activity =
+        await interaction.channel.messages.fetch(
+          game.activityMessageId
+        );
+
+      await activity.edit({
+        embeds: [createActivityEmbed(game)],
+        components: [activityButtons(game)]
+      });
+
+      if (
+        game.players.size >= game.needed &&
+        !game.lineupStarted
+      ) {
+        game.lineupStarted = true;
+
+        const lineup =
+          await interaction.channel.send({
+            embeds: [createLineupEmbed(game)],
+            components: createLineupButtons(game)
+          });
+
+        game.lineupMessageId = lineup.id;
+      }
+
+      return interaction.reply({
+        content: "You are marked as available.",
+        ephemeral: true
+      });
+    }
+
+    if (interaction.customId === "friendly_no") {
+      game.players.delete(interaction.user.id);
+
+      for (const [position, playerId] of game.lineup) {
+        if (playerId === interaction.user.id) {
+          game.lineup.delete(position);
+        }
+      }
+
+      const activity =
+        await interaction.channel.messages.fetch(
+          game.activityMessageId
+        );
+
+      await activity.edit({
+        embeds: [createActivityEmbed(game)],
+        components: [activityButtons(game)]
+      });
+
+      if (game.lineupMessageId) {
+        try {
+          const lineup =
+            await interaction.channel.messages.fetch(
+              game.lineupMessageId
+            );
+
+          await lineup.edit({
+            embeds: [createLineupEmbed(game)],
+            components: createLineupButtons(game)
+          });
+        } catch {}
+      }
+
+      return interaction.reply({
+        content: "You are marked as unavailable.",
+        ephemeral: true
+      });
+    }
+
+    if (interaction.customId === "friendly_reset") {
+      if (interaction.user.id !== game.hostId) {
+        return interaction.reply({
+          content: "Only the host can reset the friendly.",
+          ephemeral: true
+        });
+      }
+
+      game.players.clear();
+      game.lineup.clear();
+      game.lineupStarted = false;
+      game.locked = false;
+      game.subMode = false;
+
+      const activity =
+        await interaction.channel.messages.fetch(
+          game.activityMessageId
+        );
+
+      await activity.edit({
+        embeds: [createActivityEmbed(game)],
+        components: [activityButtons(game)]
+      });
+
+      if (game.lineupMessageId) {
+        try {
+          const lineup =
+            await interaction.channel.messages.fetch(
+              game.lineupMessageId
+            );
+
+          await lineup.delete();
+        } catch {}
+      }
+
+      game.lineupMessageId = null;
+
+      return interaction.reply({
+        content: "Friendly reset.",
+        ephemeral: true
+      });
+    }
+
+    if (interaction.customId === "sub_mode") {
+      if (game.locked) {
+        return interaction.reply({
+          content: "The lineup is locked.",
+          ephemeral: true
+        });
+      }
+
+      game.subMode = !game.subMode;
+
+      await interaction.message.edit({
+        embeds: [createLineupEmbed(game)],
+        components: createLineupButtons(game)
+      });
+
+      return interaction.reply({
+        content: game.subMode
+          ? "SUB mode enabled."
+          : "SUB mode disabled.",
+        ephemeral: true
+      });
+    }
+
+    if (interaction.customId === "lock_lineup") {
+      if (interaction.user.id !== game.hostId) {
+        return interaction.reply({
+          content: "Only the host can lock the lineup.",
+          ephemeral: true
+        });
+      }
+
+      if (game.lineup.size < game.needed) {
+        return interaction.reply({
+          content: "Every position must be filled first.",
+          ephemeral: true
+        });
+      }
+
+      game.locked = true;
+      game.subMode = false;
+
+      await interaction.message.edit({
+        embeds: [createLineupEmbed(game)],
+        components: []
+      });
+
+      return interaction.reply({
+        content: "Lineup locked.",
+        ephemeral: true
+      });
+    }
+
+    if (interaction.customId.startsWith("position_")) {
+      if (game.locked) {
+        return interaction.reply({
+          content: "The lineup is locked.",
+          ephemeral: true
+        });
+      }
+
       const position =
         interaction.customId.replace("position_", "");
 
+      const currentPlayer =
+        game.lineup.get(position);
+
+      if (game.subMode) {
+        if (!currentPlayer) {
+          return interaction.reply({
+            content: "That position is empty.",
+            ephemeral: true
+          });
+        }
+
+        if (currentPlayer === interaction.user.id) {
+          return interaction.reply({
+            content: "You can't sub yourself.",
+            ephemeral: true
+          });
+        }
+
+        game.lineup.set(
+          position,
+          interaction.user.id
+        );
+
+        game.players.add(interaction.user.id);
+        game.subMode = false;
+
+        await interaction.message.edit({
+          embeds: [createLineupEmbed(game)],
+          components: createLineupButtons(game)
+        });
+
+        return interaction.reply({
+          content: `You replaced <@${currentPlayer}> at **${position}**.`,
+          ephemeral: true
+        });
+      }
+
       if (!game.players.has(interaction.user.id)) {
-        await interaction.reply({
-          content:
-            "You must click CAN PLAY before choosing a position.",
+        return interaction.reply({
+          content: "You must click CAN PLAY first.",
           ephemeral: true
         });
-
-        return;
       }
 
-      const currentPosition = userPosition(
-        game,
-        interaction.user.id
-      );
+      if (currentPlayer) {
+        if (currentPlayer === interaction.user.id) {
+          game.lineup.delete(position);
 
-      if (currentPosition === position) {
-        game.lineup.delete(position);
+          await interaction.message.edit({
+            embeds: [createLineupEmbed(game)],
+            components: createLineupButtons(game)
+          });
 
-        await interaction.deferUpdate();
-        await updateLineupMessage(game);
+          return interaction.reply({
+            content: `You left **${position}**.`,
+            ephemeral: true
+          });
+        }
 
-        return;
-      }
-
-      if (currentPosition) {
-        await interaction.reply({
-          content:
-            "You already have " +
-            currentPosition +
-            ". Click it again to leave it first.",
+        return interaction.reply({
+          content: `**${position}** is already taken.`,
           ephemeral: true
         });
-
-        return;
       }
 
-      if (game.lineup.has(position)) {
-        await interaction.reply({
-          content:
-            position + " is already taken.",
-          ephemeral: true
-        });
-
-        return;
-      }
-
-      const subIndex = game.subs.indexOf(
-        interaction.user.id
-      );
-
-      if (subIndex !== -1) {
-        game.subs.splice(subIndex, 1);
+      for (const [
+        oldPosition,
+        playerId
+      ] of game.lineup) {
+        if (playerId === interaction.user.id) {
+          game.lineup.delete(oldPosition);
+        }
       }
 
       game.lineup.set(
@@ -1322,54 +1199,26 @@ client.on("interactionCreate", async function(interaction) {
         interaction.user.id
       );
 
-      await interaction.deferUpdate();
-      await updateLineupMessage(game);
+      await interaction.message.edit({
+        embeds: [createLineupEmbed(game)],
+        components: createLineupButtons(game)
+      });
 
-      return;
+      return interaction.reply({
+        content: `You are now **${position}**.`,
+        ephemeral: true
+      });
     }
   } catch (error) {
-    console.error("BUTTON ERROR:", error);
+    console.error("Interaction error:", error);
 
-    if (
-      !interaction.replied &&
-      !interaction.deferred
-    ) {
+    if (!interaction.replied && !interaction.deferred) {
       await interaction.reply({
         content: "Something went wrong.",
         ephemeral: true
-      }).catch(function() {});
+      }).catch(() => {});
     }
   }
 });
-
-client.on("messageDelete", function(message) {
-  if (!message.guild) return;
-
-  const game = getGame(message.guild.id);
-
-  if (!game) return;
-
-  if (message.id === game.activityMessageId) {
-    game.activityMessageId = null;
-    deleteGame(message.guild.id);
-  }
-
-  if (message.id === game.lineupMessageId) {
-    game.lineupMessageId = null;
-  }
-});
-
-process.on("unhandledRejection", function(error) {
-  console.error("UNHANDLED REJECTION:", error);
-});
-
-process.on("uncaughtException", function(error) {
-  console.error("UNCAUGHT EXCEPTION:", error);
-});
-
-if (!process.env.TOKEN) {
-  console.error("TOKEN is missing.");
-  process.exit(1);
-}
 
 client.login(process.env.TOKEN);
