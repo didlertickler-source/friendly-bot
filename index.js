@@ -13,6 +13,19 @@ const {
 } = require("discord.js");
 
 const { Player } = require("discord-player");
+const { DefaultExtractors } = require("@discord-player/extractor");
+
+const player = new Player(client, {
+  ytdlOptions: {
+    quality: "highestaudio",
+    highWaterMark: 1 << 25
+  }
+});
+
+async function loadExtractors() {
+  await player.extractors.loadMulti(DefaultExtractors);
+  console.log("Music extractors loaded.");
+}
 
 require("dotenv").config();
 
@@ -185,8 +198,10 @@ const musicclearCommand = new SlashCommandBuilder()
   .setName("musicclear")
   .setDescription("Clear the music queue (keeps current song)");
 
-client.once("ready", () => {
+client.once("clientReady", async () => {
   console.log(`${client.user.tag} is online.`);
+
+  await loadExtractors();
 
   (async () => {
     try {
