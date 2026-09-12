@@ -13,7 +13,6 @@ const {
 } = require("discord.js");
 
 const { Player } = require("discord-player");
-const { YoutubeExtractor } = require("@discord-player/extractor");
 
 require("dotenv").config();
 
@@ -43,8 +42,7 @@ const player = new Player(client, {
   }
 });
 
-// Register YouTube extractor explicitly
-player.extractors.register(YoutubeExtractor, {});
+// Do NOT manually register extractors. discord-player v7 handles YouTube by default.
 
 const games = new Map();       // guildId -> friendly game
 const scrims = new Map();      // guildId -> scrim
@@ -1821,10 +1819,8 @@ async function handleMusicInteractions(interaction) {
     }
 
     try {
-      // Try direct play first (works well for direct YouTube links)
       const searchResult = await player.search(link, {
-        requestedBy: interaction.user,
-        searchEngine: "youtube"
+        requestedBy: interaction.user
       });
 
       if (!searchResult || !searchResult.tracks || !searchResult.tracks.length) {
@@ -2026,7 +2022,7 @@ async function handleMusicInteractions(interaction) {
       });
     }
 
-    const newMode = queue.repeatMode === 0 ? 1 : 0; // 0 = off, 1 = track
+    const newMode = queue.repeatMode === 0 ? 1 : 0;
     queue.setRepeatMode(newMode);
 
     return interaction.reply({
