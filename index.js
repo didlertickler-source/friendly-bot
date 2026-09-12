@@ -1768,6 +1768,7 @@ async function handleMusicInteractions(interaction) {
 
   const guildId = interaction.guildId;
   const member = interaction.member;
+  const command = interaction.commandName;
 
   const musicCommands = [
     "music",
@@ -1781,7 +1782,7 @@ async function handleMusicInteractions(interaction) {
     "musicclear"
   ];
 
-  if (!musicCommands.includes(interaction.commandName)) return;
+  if (!musicCommands.includes(command)) return;
 
   const requiresVC = [
     "music",
@@ -1793,126 +1794,116 @@ async function handleMusicInteractions(interaction) {
     "musicclear"
   ];
 
-  if (requiresVC.includes(interaction.commandName)) {
-    if (!member?.voice?.channelId) {
-      return interaction.reply({
-        content: "You need to be in a voice channel to use this command.",
-        ephemeral: true
-      });
-    }
+  if (requiresVC.includes(command) && !member?.voice?.channel) {
+    return interaction.reply({
+      content: "You need to be in a voice channel to use this command.",
+      ephemeral: true
+    });
   }
 
   const queue = player.queues.get(guildId);
 
-  // /music
-  if (interaction.commandName === "music") {
+  if (command === "music") {
     if (!canHost(interaction.member)) {
-      return interaction.reply({ content: hostOnlyMessage(), ephemeral: true });
+      return interaction.reply({
+        content: hostOnlyMessage(),
+        ephemeral: true
+      });
     }
 
-    const link = interaction.options.getString("link");
+    const link = interaction.options.getString("link", true).trim();
+
     if (!link) {
       return interaction.reply({
-        content: "You must provide a link.",
+        content: "You must provide a YouTube link.",
         ephemeral: true
       });
     }
 
     try {
-      const searchResult = await player.search(link, {
-        requestedBy: interaction.user
+      const result = await player.play(member.voice.channel, link, {
+        requestedBy: interaction.user,
+        nodeOptions: {
+          metadata: {
+            channel: interaction.channel,
+            requestedBy: interaction.user
+          }
+        }
       });
 
-      if (!searchResult || !searchResult.tracks || !searchResult.tracks.length) {
+      if (!result || !result.track) {
         return interaction.reply({
-          content: "No results found. Make sure the link is a valid YouTube URL.",
+          content: "I couldn't find anything to play from that link.",
           ephemeral: true
         });
       }
 
-      if (!queue) {
-        await player.play(member.voice.channel, searchResult, {
-          nodeOptions: {
-            metadata: {
-              channel: interaction.channel,
-              client: interaction.guild.members.me,
-              requestedBy: interaction.user
-            }
-          }
-        });
-
-        return interaction.reply({
-          content: `Now playing: ${searchResult.tracks[0].title}`,
-          ephemeral: false
-        });
-      } else {
-        if (searchResult.playlist) {
-          queue.addTrack(searchResult.tracks);
-          return interaction.reply({
-            content: `Added playlist: ${searchResult.playlist.title} (${searchResult.tracks.length} tracks)`,
-            ephemeral: false
-          });
-        } else {
-          queue.addTrack(searchResult.tracks[0]);
-          return interaction.reply({
-            content: `Added to queue: ${searchResult.tracks[0].title}`,
-            ephemeral: false
-          });
-        }
-      }
-    } catch (err) {
-      console.error("Music search/play error:", err);
       return interaction.reply({
-        content: "Failed to play that link. Try another YouTube URL.",
+        content: `Now playing: **${result.track.title}**`,
+        ephemeral: false
+      });
+    } catch (err) {
+      console.error("Music error:", err);
+
+      return interaction.reply({
+        content: "Failed to play that link. Check the Railway logs for the exact error.",
         ephemeral: true
       });
     }
   }
 
-  // /musicstop
-  if (interaction.commandName === "musicstop") {
+  if (command === "musicstop") {
     if (!canHost(interaction.member)) {
-      return interaction.reply({ content: hostOnlyMessage(), ephemeral: true });
+      return interaction.reply({
+        content: hostOnlyMessage(),
+        ephemeral: true
+      });
     }
 
     if (!queue) {
       return interaction.reply({
-        content: "No music is currently playing in this server.",
+        content: "No music is currently playing.",
         ephemeral: true
       });
     }
 
     queue.delete();
+
     return interaction.reply({
       content: "Music stopped, queue cleared, and left voice channel.",
       ephemeral: false
     });
   }
 
-  // /musicskip
-  if (interaction.commandName === "musicskip") {
+  if (command === "musicskip") {
     if (!canHost(interaction.member)) {
-      return interaction.reply({ content: hostOnlyMessage(), ephemeral: true });
+      return interaction.reply({
+        content: hostOnlyMessage(),
+        ephemeral: true
+      });
     }
 
     if (!queue || !queue.currentTrack) {
       return interaction.reply({
-        content: "No music is currently playing or queued.",
+        content: "No music is currently playing.",
         ephemeral: true
       });
     }
 
     queue.node.skip();
+
     return interaction.reply({
       content: "Skipped current track.",
       ephemeral: false
     });
   }
 
-  // /musicpause
-  if (interaction.commandName === "musicpause") {
+  if (command === "musicpause") {
     if (!canHost(interaction.member)) {
-      return interaction.reply({ content: hostOnlyMessage(), ephemeral: true });
+      return interaction.reply({
+        content: hostOnlyMessage(),
+        ephemeral: true
+      });
     }
 
     if (!queue || !queue.currentTrack) {
@@ -1930,16 +1921,19 @@ async function handleMusicInteractions(interaction) {
     }
 
     queue.node.setPaused(true);
+
     return interaction.reply({
       content: "Music paused.",
       ephemeral: false
     });
   }
 
-  // /musicresume
-  if (interaction.commandName === "musicresume") {
+  if (command === "musicresume") {
     if (!canHost(interaction.member)) {
-      return interaction.reply({ content: hostOnlyMessage(), ephemeral: true });
+      return interaction.reply({
+        content: hostOnlyMessage(),
+        ephemeral: true
+      });
     }
 
     if (!queue || !queue.currentTrack) {
@@ -1957,14 +1951,14 @@ async function handleMusicInteractions(interaction) {
     }
 
     queue.node.setPaused(false);
+
     return interaction.reply({
       content: "Music resumed.",
       ephemeral: false
     });
   }
 
-  // /musicqueue
-  if (interaction.commandName === "musicqueue") {
+  if (command === "musicqueue") {
     if (!queue || (!queue.currentTrack && queue.tracks.size === 0)) {
       return interaction.reply({
         content: "The queue is empty.",
@@ -1973,15 +1967,19 @@ async function handleMusicInteractions(interaction) {
     }
 
     const lines = [];
+
     if (queue.currentTrack) {
       lines.push(`**Now playing:** ${queue.currentTrack.title}`);
     }
 
-    if (queue.tracks.size) {
+    if (queue.tracks.size > 0) {
+      lines.push("");
       lines.push("**Queue:**");
+
       queue.tracks.slice(0, 10).forEach((track, i) => {
         lines.push(`${i + 1}. ${track.title}`);
       });
+
       if (queue.tracks.size > 10) {
         lines.push(`...and ${queue.tracks.size - 10} more.`);
       }
@@ -1993,8 +1991,7 @@ async function handleMusicInteractions(interaction) {
     });
   }
 
-  // /musicnow
-  if (interaction.commandName === "musicnow") {
+  if (command === "musicnow") {
     if (!queue || !queue.currentTrack) {
       return interaction.reply({
         content: "No music is currently playing.",
@@ -2002,17 +1999,22 @@ async function handleMusicInteractions(interaction) {
       });
     }
 
-    const status = queue.node.isPaused() ? "(paused)" : "(playing)";
+    const status = queue.node.isPaused()
+      ? "(paused)"
+      : "(playing)";
+
     return interaction.reply({
-      content: `Now playing: ${queue.currentTrack.title} ${status}`,
+      content: `Now playing: **${queue.currentTrack.title}** ${status}`,
       ephemeral: false
     });
   }
 
-  // /musicloop
-  if (interaction.commandName === "musicloop") {
+  if (command === "musicloop") {
     if (!canHost(interaction.member)) {
-      return interaction.reply({ content: hostOnlyMessage(), ephemeral: true });
+      return interaction.reply({
+        content: hostOnlyMessage(),
+        ephemeral: true
+      });
     }
 
     if (!queue || !queue.currentTrack) {
@@ -2023,18 +2025,23 @@ async function handleMusicInteractions(interaction) {
     }
 
     const newMode = queue.repeatMode === 0 ? 1 : 0;
+
     queue.setRepeatMode(newMode);
 
     return interaction.reply({
-      content: newMode ? "Loop enabled for current song." : "Loop disabled.",
+      content: newMode
+        ? "Loop enabled for the current song."
+        : "Loop disabled.",
       ephemeral: false
     });
   }
 
-  // /musicclear
-  if (interaction.commandName === "musicclear") {
+  if (command === "musicclear") {
     if (!canHost(interaction.member)) {
-      return interaction.reply({ content: hostOnlyMessage(), ephemeral: true });
+      return interaction.reply({
+        content: hostOnlyMessage(),
+        ephemeral: true
+      });
     }
 
     if (!queue) {
@@ -2045,12 +2052,13 @@ async function handleMusicInteractions(interaction) {
     }
 
     const count = queue.tracks.size;
+
     queue.tracks.clear();
 
     return interaction.reply({
       content: count
         ? `Cleared ${count} track(s) from the queue.`
-        : "Queue was already empty.",
+        : "The queue was already empty.",
       ephemeral: false
     });
   }
