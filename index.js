@@ -185,44 +185,39 @@ const musicclearCommand = new SlashCommandBuilder()
   .setName("musicclear")
   .setDescription("Clear the music queue (keeps current song)");
 
-client.once("ready", async () => {
+client.once("ready", () => {
   console.log(`${client.user.tag} is online.`);
 
-  try {
-    const rest = new REST({ version: "10" }).setToken(process.env.TOKEN);
+  (async () => {
+    try {
+      const rest = new REST({ version: "10" }).setToken(process.env.TOKEN);
 
-    await rest.put(
-      Routes.applicationCommands(client.user.id),
-      {
-        body: [
-          friendlyCommand.toJSON(),
-          scrimCommand.toJSON(),
-          activityCommand.toJSON(),
-          lineupCommand.toJSON(),
-          musicCommand.toJSON(),
-          musicstopCommand.toJSON(),
-          musicskipCommand.toJSON(),
-          musicpauseCommand.toJSON(),
-          musicresumeCommand.toJSON(),
-          musicqueueCommand.toJSON(),
-          musicnowCommand.toJSON(),
-          musicloopCommand.toJSON(),
-          musicclearCommand.toJSON()
-        ]
-      }
-    );
+      await rest.put(
+        Routes.applicationCommands(client.user.id),
+        {
+          body: [
+            friendlyCommand.toJSON(),
+            scrimCommand.toJSON(),
+            activityCommand.toJSON(),
+            lineupCommand.toJSON(),
+            musicCommand.toJSON(),
+            musicstopCommand.toJSON(),
+            musicskipCommand.toJSON(),
+            musicpauseCommand.toJSON(),
+            musicresumeCommand.toJSON(),
+            musicqueueCommand.toJSON(),
+            musicnowCommand.toJSON(),
+            musicloopCommand.toJSON(),
+            musicclearCommand.toJSON()
+          ]
+        }
+      );
 
-    console.log("Slash commands registered.");
-  } catch (error) {
-    console.error("Slash registration error:", error);
-  }
-
-  // Authorize play-dl (required for YouTube)
-  try {
-    await playDL.authorize();
-  } catch (e) {
-    console.error("play-dl authorization error:", e);
-  }
+      console.log("Slash commands registered.");
+    } catch (error) {
+      console.error("Slash registration error:", error);
+    }
+  })();
 });
 
 // FRIENDLY EMBEDS & BUTTONS
@@ -1788,7 +1783,6 @@ async function handleMusicInteractions(interaction) {
 
   if (!musicCommands.includes(interaction.commandName)) return;
 
-  // For read-only commands, VC membership not required
   const requiresVC = [
     "music",
     "musicstop",
@@ -1857,8 +1851,7 @@ async function handleMusicInteractions(interaction) {
     if (!st) return;
 
     if (st.queue.length === 0) {
-      // No more songs: stop player but keep connection for a bit? We'll leave VC.
-      stopMusic(guildId, true); // true = leave VC
+      stopMusic(guildId, true);
       return;
     }
 
@@ -1867,17 +1860,24 @@ async function handleMusicInteractions(interaction) {
     st.paused = false;
 
     try {
-      const info = await playDL.video_info(next.url);
-      const stream = await playDL.stream_from_info(info);
-      const resource = createAudioResource(stream.stream, {
-        inputType: stream.type,
+      const streamInfo = await playDL.play(next.url, {
+        type: "youtube",
+        quality: "highaudio",
+        language: "en"
+      });
+
+      if (!streamInfo || !streamInfo.stream) {
+        throw new Error("No stream returned from play-dl");
+      }
+
+      const resource = createAudioResource(streamInfo.stream, {
+        inputType: streamInfo.type,
         volume: true
       });
 
       st.player.play(resource);
     } catch (err) {
       console.error("Music play error:", err);
-      // Try next song if this one fails
       playNext(guildId);
     }
   }
@@ -1887,7 +1887,6 @@ async function handleMusicInteractions(interaction) {
     if (!st) return;
 
     if (st.loop && st.current) {
-      // Re-add current to front of queue to loop
       st.queue.unshift(st.current);
     }
 
@@ -1936,10 +1935,8 @@ async function handleMusicInteractions(interaction) {
 
     const st = ensurePlayer();
 
-    // Add to queue
     st.queue.push({ url: link, requestedBy: interaction.user.id });
 
-    // If nothing is playing, start now
     if (!st.current && st.player.state.status === AudioPlayerStatus.Idle) {
       await interaction.deferReply();
       try {
@@ -1990,7 +1987,7 @@ async function handleMusicInteractions(interaction) {
       });
     }
 
-    state.player.stop(); // triggers onTrackEnd -> playNext
+    state.player.stop();
     return interaction.reply({
       content: "Skipped current track.",
       ephemeral: false
