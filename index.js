@@ -13,7 +13,7 @@ const {
 } = require("discord.js");
 
 const { Player } = require("discord-player");
-const { DefaultExtractors } = require("@discord-player/extractor");
+const { YoutubeExtractor } = require("@discord-player/extractor");
 
 require("dotenv").config();
 
@@ -43,8 +43,8 @@ const player = new Player(client, {
   }
 });
 
-// Load default extractors the new way
-player.extractors.loadMulti(DefaultExtractors);
+// Register YouTube extractor explicitly
+player.extractors.register(YoutubeExtractor, {});
 
 const games = new Map();       // guildId -> friendly game
 const scrims = new Map();      // guildId -> scrim
@@ -1821,13 +1821,15 @@ async function handleMusicInteractions(interaction) {
     }
 
     try {
+      // Try direct play first (works well for direct YouTube links)
       const searchResult = await player.search(link, {
-        requestedBy: interaction.user
+        requestedBy: interaction.user,
+        searchEngine: "youtube"
       });
 
-      if (!searchResult || !searchResult.tracks.length) {
+      if (!searchResult || !searchResult.tracks || !searchResult.tracks.length) {
         return interaction.reply({
-          content: "No results found.",
+          content: "No results found. Make sure the link is a valid YouTube URL.",
           ephemeral: true
         });
       }
@@ -1865,7 +1867,7 @@ async function handleMusicInteractions(interaction) {
     } catch (err) {
       console.error("Music search/play error:", err);
       return interaction.reply({
-        content: "Failed to play that link.",
+        content: "Failed to play that link. Try another YouTube URL.",
         ephemeral: true
       });
     }
