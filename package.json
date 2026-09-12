@@ -15,6 +15,7 @@
     "discord.js": "^14.27.0",
     "dotenv": "^17.4.2",
     "@discordjs/voice": "^0.17.0",
-    "play-dl": "^1.9.7"
+    "discord-player": "^7.1.0",
+    "@discord-player/extractor": "^4.5.0"
   }
 }
