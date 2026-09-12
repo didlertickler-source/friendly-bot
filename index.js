@@ -13,6 +13,7 @@ const {
 } = require("discord.js");
 
 const { Player } = require("discord-player");
+const { DefaultExtractors } = require("@discord-player/extractor");
 
 require("dotenv").config();
 
@@ -42,8 +43,8 @@ const player = new Player(client, {
   }
 });
 
-// Load default extractors (includes YouTube)
-player.extractors.loadDefault();
+// Load default extractors the new way
+player.extractors.loadMulti(DefaultExtractors);
 
 const games = new Map();       // guildId -> friendly game
 const scrims = new Map();      // guildId -> scrim
