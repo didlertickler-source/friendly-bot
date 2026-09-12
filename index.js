@@ -16,7 +16,9 @@ const {
   joinVoiceChannel,
   createAudioPlayer,
   createAudioResource,
-  AudioPlayerStatus
+  AudioPlayerStatus,
+  entersState,
+  VoiceConnectionStatus
 } = require("@discordjs/voice");
 
 const playDL = require("play-dl");
@@ -213,6 +215,13 @@ client.once("ready", async () => {
     console.log("Slash commands registered.");
   } catch (error) {
     console.error("Slash registration error:", error);
+  }
+
+  // Authorize play-dl (required for YouTube)
+  try {
+    await playDL.authorize();
+  } catch (e) {
+    console.error("play-dl authorization error:", e);
   }
 });
 
@@ -1757,7 +1766,6 @@ client.on("messageReactionRemove", async (reaction, user) => {
 
 /* =========================
    MUSIC HANDLER FUNCTION
-   This is called from interactionCreate for music commands
    ========================= */
 
 async function handleMusicInteractions(interaction) {
@@ -1766,20 +1774,42 @@ async function handleMusicInteractions(interaction) {
   const guildId = interaction.guildId;
   const member = interaction.member;
 
-  if (
-    !member?.voice?.channelId &&
-    interaction.commandName !== "musicstop" &&
-    interaction.commandName !== "musicqueue" &&
-    interaction.commandName !== "musicnow"
-  ) {
-    return interaction.reply({
-      content: "You need to be in a voice channel to use music commands.",
-      ephemeral: true
-    });
+  const musicCommands = [
+    "music",
+    "musicstop",
+    "musicskip",
+    "musicpause",
+    "musicresume",
+    "musicqueue",
+    "musicnow",
+    "musicloop",
+    "musicclear"
+  ];
+
+  if (!musicCommands.includes(interaction.commandName)) return;
+
+  // For read-only commands, VC membership not required
+  const requiresVC = [
+    "music",
+    "musicstop",
+    "musicskip",
+    "musicpause",
+    "musicresume",
+    "musicloop",
+    "musicclear"
+  ];
+
+  if (requiresVC.includes(interaction.commandName)) {
+    if (!member?.voice?.channelId) {
+      return interaction.reply({
+        content: "You need to be in a voice channel to use this command.",
+        ephemeral: true
+      });
+    }
   }
 
-  const voiceChannel = member?.voice?.channel;
   let state = musicState.get(guildId);
+  const voiceChannel = member?.voice?.channel;
 
   function ensurePlayer() {
     if (!state) {
@@ -1805,6 +1835,17 @@ async function handleMusicInteractions(interaction) {
         adapterCreator: interaction.guild.voiceAdapterCreator
       });
 
+      state.connection.on(VoiceConnectionStatus.Disconnected, async () => {
+        try {
+          await Promise.race([
+            entersState(state.connection, VoiceConnectionStatus.Signalling, 5000),
+            entersState(state.connection, VoiceConnectionStatus.Connecting, 5000)
+          ]);
+        } catch {
+          // Stay disconnected but don't destroy immediately
+        }
+      });
+
       state.connection.subscribe(state.player);
     }
 
@@ -1816,23 +1857,27 @@ async function handleMusicInteractions(interaction) {
     if (!st) return;
 
     if (st.queue.length === 0) {
-      stopMusic(guildId);
+      // No more songs: stop player but keep connection for a bit? We'll leave VC.
+      stopMusic(guildId, true); // true = leave VC
       return;
     }
 
     const next = st.queue.shift();
     st.current = next;
+    st.paused = false;
 
     try {
       const info = await playDL.video_info(next.url);
       const stream = await playDL.stream_from_info(info);
       const resource = createAudioResource(stream.stream, {
-        inputType: stream.type
+        inputType: stream.type,
+        volume: true
       });
 
       st.player.play(resource);
     } catch (err) {
       console.error("Music play error:", err);
+      // Try next song if this one fails
       playNext(guildId);
     }
   }
@@ -1842,6 +1887,7 @@ async function handleMusicInteractions(interaction) {
     if (!st) return;
 
     if (st.loop && st.current) {
+      // Re-add current to front of queue to loop
       st.queue.unshift(st.current);
     }
 
@@ -1849,7 +1895,7 @@ async function handleMusicInteractions(interaction) {
     playNext(guildId);
   }
 
-  function stopMusic(guildId) {
+  function stopMusic(guildId, leaveVC = true) {
     const st = musicState.get(guildId);
     if (!st) return;
 
@@ -1863,11 +1909,15 @@ async function handleMusicInteractions(interaction) {
     st.paused = false;
 
     if (st.connection) {
-      st.connection.destroy();
+      if (leaveVC) {
+        st.connection.destroy();
+      }
       st.connection = null;
     }
 
-    musicState.delete(guildId);
+    if (leaveVC) {
+      musicState.delete(guildId);
+    }
   }
 
   // /music
@@ -1884,10 +1934,13 @@ async function handleMusicInteractions(interaction) {
       });
     }
 
-    ensurePlayer();
+    const st = ensurePlayer();
 
-    if (!state.current && state.queue.length === 0) {
-      state.queue.push({ url: link, requestedBy: interaction.user.id });
+    // Add to queue
+    st.queue.push({ url: link, requestedBy: interaction.user.id });
+
+    // If nothing is playing, start now
+    if (!st.current && st.player.state.status === AudioPlayerStatus.Idle) {
       await interaction.deferReply();
       try {
         await playNext(guildId);
@@ -1897,7 +1950,6 @@ async function handleMusicInteractions(interaction) {
         return interaction.editReply("Failed to play that link.");
       }
     } else {
-      state.queue.push({ url: link, requestedBy: interaction.user.id });
       return interaction.reply({
         content: `Added to queue: ${link}`,
         ephemeral: false
@@ -1918,7 +1970,7 @@ async function handleMusicInteractions(interaction) {
       });
     }
 
-    stopMusic(guildId);
+    stopMusic(guildId, true);
     return interaction.reply({
       content: "Music stopped, queue cleared, and left voice channel.",
       ephemeral: false
@@ -1938,7 +1990,7 @@ async function handleMusicInteractions(interaction) {
       });
     }
 
-    state.player.stop();
+    state.player.stop(); // triggers onTrackEnd -> playNext
     return interaction.reply({
       content: "Skipped current track.",
       ephemeral: false
