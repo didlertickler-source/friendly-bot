@@ -15,18 +15,6 @@ const {
 const { Player } = require("discord-player");
 const { DefaultExtractors } = require("@discord-player/extractor");
 
-const player = new Player(client, {
-  ytdlOptions: {
-    quality: "highestaudio",
-    highWaterMark: 1 << 25
-  }
-});
-
-async function loadExtractors() {
-  await player.extractors.loadMulti(DefaultExtractors);
-  console.log("Music extractors loaded.");
-}
-
 require("dotenv").config();
 
 const client = new Client({
@@ -47,13 +35,17 @@ const client = new Client({
   ]
 });
 
-// Create player instance
 const player = new Player(client, {
   ytdlOptions: {
     quality: "highestaudio",
     highWaterMark: 1 << 25
   }
 });
+
+async function loadExtractors() {
+  await player.extractors.loadMulti(DefaultExtractors);
+  console.log("Music extractors loaded.");
+}
 
 // Do NOT manually register extractors. discord-player v7 handles YouTube by default.
 
