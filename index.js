@@ -18,12 +18,36 @@ const client = new Client({
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent,
-    GatewayIntentBits.GuildMembers
+    GatewayIntentBits.GuildMembers,
+    GatewayIntentBits.GuildPresences
   ]
 });
 
 const games = new Map();
 const PREFIX = "?";
+const HOSTER_ROLE = "〔✦〕FF Hoster";
+const THEME = 0x5865F2;
+
+function makeEmbed(title, description = "") {
+  return new EmbedBuilder()
+    .setColor(THEME)
+    .setTitle(`〔✦〕 ${title}`)
+    .setDescription(description)
+    .setTimestamp();
+}
+
+function canHost(member) {
+  if (!member) return false;
+
+  return (
+    member.permissions.has(PermissionsBitField.Flags.Administrator) ||
+    member.roles.cache.some(role => role.name === HOSTER_ROLE)
+  );
+}
+
+function hostOnlyMessage() {
+  return `You need the **${HOSTER_ROLE}** role or **Administrator** permission to use this.`;
+}
 
 const formations = {
   4: {
@@ -101,7 +125,7 @@ function createActivityEmbed(game) {
   const players = [...game.players];
 
   return new EmbedBuilder()
-    .setTitle("FRIENDLY ACTIVITY CHECK")
+    .setTitle("〔✦〕 FRIENDLY ACTIVITY CHECK")
     .setDescription(
       `**Players:** ${players.length}/${game.needed}\n` +
       `**Formation:** ${formation.name}\n\n` +
@@ -148,7 +172,7 @@ function createLineupEmbed(game) {
   }
 
   return new EmbedBuilder()
-    .setTitle(`LINEUP • ${formation.name}`)
+    .setTitle(`〔✦〕 LINEUP • ${formation.name}`)
     .setDescription(text)
     .setFooter({
       text: game.locked
@@ -239,42 +263,34 @@ client.on("messageCreate", async message => {
 
   try {
     if (commandName === "help" || commandName === "commands") {
-      const embed = new EmbedBuilder()
-        .setTitle("BOT COMMANDS")
-        .setDescription(
-          [
-            "**FRIENDLY**",
-            "`/friendly <players>` — start a friendly",
-            "",
-            "**MODERATION**",
-            "`?purge <amount>` — delete messages",
-            "`?clear <amount>` — delete messages",
-            "`?kick @user [reason]` — kick a member",
-            "`?ban @user [reason]` — ban a member",
-            "`?unban <userID>` — unban a user",
-            "`?timeout @user <minutes>` — timeout a member",
-            "`?untimeout @user` — remove timeout",
-            "`?warn @user [reason]` — warn a member",
-            "`?lock` — lock the channel",
-            "`?unlock` — unlock the channel",
-            "`?slowmode <seconds>` — set slowmode",
-            "",
-            "**SERVER**",
-            "`?teamrank XI` — show Starting XI",
-            "`?membercount` — show member count",
-            "`?serverinfo` — server information",
-            "`?userinfo [@user]` — user information",
-            "`?avatar [@user]` — show avatar",
-            "",
-            "**UTILITY**",
-            "`?ping` — bot latency",
-            "`?say <message>` — send a message",
-            "`?announce <message>` — announcement",
-            "`?poll <question>` — create a poll",
-            "`?botinfo` — bot information"
-          ].join("\n")
-        )
-        .setColor(0x111111);
+      const embed = makeEmbed(
+        "COMMAND CENTER",
+        [
+          "### ⚽ FRIENDLY SYSTEM",
+          "`/friendly <players>` — start an activity check",
+          "",
+          "### 🛡️ MODERATION",
+          "`?purge <amount>` `?clear <amount>`",
+          "`?kick @user [reason]` `?ban @user [reason]`",
+          "`?unban <userID>` `?timeout @user <minutes>` `?untimeout @user`",
+          "`?warn @user [reason]` `?lock` `?unlock` `?slowmode <seconds>`",
+          "",
+          "### 🏟️ SERVER",
+          "`?teamrank XI` `?membercount` `?serverinfo`",
+          "`?userinfo [@user]` `?avatar [@user]`",
+          "`?roleinfo @role` `?channelinfo` `?servericon`",
+          "",
+          "### 🧰 UTILITY",
+          "`?ping` `?uptime` `?botinfo` `?online` `?offline` `?members`",
+          "`?say <message>` `?announce <message>` `?poll <question>`",
+          "`?choose <option1 | option2 | ...>`",
+          "`?coinflip` `?8ball <question>` `?random <min> <max>`",
+          "`?topic <text>`",
+          "",
+          "### ✦ FRIENDLY ACCESS",
+          `Only **${HOSTER_ROLE}** or members with **Administrator** can use \`/friendly\`.`
+        ].join("\n")
+      );
 
       return message.reply({ embeds: [embed] });
     }
@@ -372,7 +388,7 @@ client.on("messageCreate", async message => {
         .setFooter({
           text: roleName
         })
-        .setColor(0x111111);
+        .setColor(THEME);
 
       return message.channel.send({
         embeds: [embed]
@@ -662,7 +678,7 @@ client.on("messageCreate", async message => {
             value: roles.slice(0, 1024)
           }
         )
-        .setColor(0x111111);
+        .setColor(THEME);
 
       return message.channel.send({
         embeds: [embed]
@@ -708,7 +724,7 @@ client.on("messageCreate", async message => {
             inline: true
           }
         )
-        .setColor(0x111111);
+        .setColor(THEME);
 
       return message.channel.send({
         embeds: [embed]
@@ -723,7 +739,7 @@ client.on("messageCreate", async message => {
       const embed = new EmbedBuilder()
         .setTitle(`${user.username}'s Avatar`)
         .setImage(user.displayAvatarURL({ size: 1024 }))
-        .setColor(0x111111);
+        .setColor(THEME);
 
       return message.channel.send({
         embeds: [embed]
@@ -775,7 +791,7 @@ client.on("messageCreate", async message => {
         .setFooter({
           text: `Posted by ${message.author.tag}`
         })
-        .setColor(0x111111);
+        .setColor(THEME);
 
       return message.channel.send({
         embeds: [embed]
@@ -805,7 +821,7 @@ client.on("messageCreate", async message => {
         .setFooter({
           text: `Poll by ${message.author.tag}`
         })
-        .setColor(0x111111);
+        .setColor(THEME);
 
       const poll = await message.channel.send({
         embeds: [embed]
@@ -821,6 +837,235 @@ client.on("messageCreate", async message => {
       return message.reply(
         `This server has **${message.guild.memberCount}** members.`
       );
+    }
+
+    if (commandName === "uptime") {
+      const total = Math.floor(client.uptime / 1000);
+      const days = Math.floor(total / 86400);
+      const hours = Math.floor((total % 86400) / 3600);
+      const minutes = Math.floor((total % 3600) / 60);
+      const seconds = total % 60;
+
+      return message.reply({
+        embeds: [makeEmbed("BOT UPTIME", `**${days}d ${hours}h ${minutes}m ${seconds}s**`)]
+      });
+    }
+
+    if (commandName === "roleinfo") {
+      const role = message.mentions.roles.first();
+
+      if (!role) return message.reply("Use `?roleinfo @role`.");
+
+      return message.reply({
+        embeds: [
+          makeEmbed(
+            "ROLE INFORMATION",
+            [
+              `**Role:** ${role}`,
+              `**Members:** ${role.members.size}`,
+              `**Position:** ${role.position}`,
+              `**Created:** <t:${Math.floor(role.createdTimestamp / 1000)}:R>`,
+              `**Mentionable:** ${role.mentionable ? "Yes" : "No"}`
+            ].join("\n")
+          )
+        ]
+      });
+    }
+
+    if (commandName === "channelinfo") {
+      return message.reply({
+        embeds: [
+          makeEmbed(
+            "CHANNEL INFORMATION",
+            [
+              `**Channel:** ${message.channel}`,
+              `**Name:** ${message.channel.name}`,
+              `**Type:** ${message.channel.type}`,
+              `**ID:** \`${message.channel.id}\``,
+              `**Created:** <t:${Math.floor(message.channel.createdTimestamp / 1000)}:R>`
+            ].join("\n")
+          )
+        ]
+      });
+    }
+
+    if (commandName === "servericon") {
+      const icon = message.guild.iconURL({ size: 1024 });
+
+      if (!icon) return message.reply("This server has no icon.");
+
+      return message.reply({
+        embeds: [
+          makeEmbed("SERVER ICON", `**${message.guild.name}**`)
+            .setImage(icon)
+        ]
+      });
+    }
+
+    if (commandName === "choose") {
+      const choices = args.join(" ").split("|").map(x => x.trim()).filter(Boolean);
+
+      if (choices.length < 2) {
+        return message.reply("Use `?choose option 1 | option 2 | option 3`.");
+      }
+
+      const choice = choices[Math.floor(Math.random() * choices.length)];
+
+      return message.reply({
+        embeds: [makeEmbed("CHOICE", `I choose: **${choice}**`)]
+      });
+    }
+
+    if (commandName === "coinflip") {
+      const result = Math.random() < 0.5 ? "HEADS" : "TAILS";
+
+      return message.reply({
+        embeds: [makeEmbed("COIN FLIP", `The coin landed on **${result}**.`)]
+      });
+    }
+
+    if (commandName === "8ball") {
+      const question = args.join(" ");
+
+      if (!question) return message.reply("Ask a question: `?8ball <question>`.");
+
+      const answers = [
+        "Yes.",
+        "No.",
+        "Most likely.",
+        "Definitely.",
+        "Try again later.",
+        "I wouldn't count on it.",
+        "Looks promising.",
+        "Very doubtful."
+      ];
+
+      const answer = answers[Math.floor(Math.random() * answers.length)];
+
+      return message.reply({
+        embeds: [
+          makeEmbed(
+            "8BALL",
+            `**Question:** ${question}\n**Answer:** ${answer}`
+          )
+        ]
+      });
+    }
+
+    if (commandName === "random") {
+      const min = parseInt(args[0]);
+      const max = parseInt(args[1]);
+
+      if (Number.isNaN(min) || Number.isNaN(max) || min > max) {
+        return message.reply("Use `?random <min> <max>`.");
+      }
+
+      const result = Math.floor(Math.random() * (max - min + 1)) + min;
+
+      return message.reply({
+        embeds: [makeEmbed("RANDOM NUMBER", `**${result}**`)]
+      });
+    }
+
+    if (commandName === "topic") {
+      if (!message.member.permissions.has(PermissionsBitField.Flags.ManageChannels)) {
+        return message.reply("You need **Manage Channels**.");
+      }
+
+      const topic = args.join(" ");
+
+      if (!topic) return message.reply("Use `?topic <text>`.");
+
+      if (!message.channel.setTopic) {
+        return message.reply("This channel doesn't support topics.");
+      }
+
+      await message.channel.setTopic(topic);
+
+      return message.reply({
+        embeds: [makeEmbed("CHANNEL TOPIC UPDATED", `**New topic:** ${topic}`)]
+      });
+    }
+
+    if (commandName === "nick") {
+      if (!message.member.permissions.has(PermissionsBitField.Flags.ManageNicknames)) {
+        return message.reply("You need **Manage Nicknames**.");
+      }
+
+      const member = message.mentions.members.first();
+      const nickname = args.slice(1).join(" ");
+
+      if (!member || !nickname) {
+        return message.reply("Use `?nick @user <new nickname>`.");
+      }
+
+      if (!member.manageable) {
+        return message.reply("I can't change that member's nickname.");
+      }
+
+      await member.setNickname(nickname, `Changed by ${message.author.tag}`);
+
+      return message.reply({
+        embeds: [makeEmbed("NICKNAME UPDATED", `${member} is now **${nickname}**.`)]
+      });
+    }
+
+    if (commandName === "online" || commandName === "offline" || commandName === "members") {
+      await message.guild.members.fetch();
+
+      const humans = message.guild.members.cache.filter(member => !member.user.bot);
+      const onlineMembers = humans.filter(member => {
+        const status = member.presence?.status;
+        return status && status !== "offline";
+      });
+      const offlineMembers = humans.filter(member => {
+        const status = member.presence?.status;
+        return !status || status === "offline";
+      });
+
+      if (commandName === "online") {
+        const list = [...onlineMembers.values()]
+          .slice(0, 100)
+          .map((member, index) => `**${index + 1}.** <@${member.id}>`)
+          .join("\n") || "No online members found.";
+
+        const embed = new EmbedBuilder()
+          .setTitle(`ONLINE MEMBERS • ${onlineMembers.size}`)
+          .setDescription(list)
+          .setFooter({ text: `Showing up to 100 • Total members: ${humans.size}` })
+          .setColor(COLORS.success)
+          .setTimestamp();
+
+        return message.channel.send({ embeds: [embed] });
+      }
+
+      if (commandName === "offline") {
+        const list = [...offlineMembers.values()]
+          .slice(0, 100)
+          .map((member, index) => `**${index + 1}.** ${member.user.tag}`)
+          .join("\n") || "No offline members found.";
+
+        const embed = new EmbedBuilder()
+          .setTitle(`OFFLINE MEMBERS • ${offlineMembers.size}`)
+          .setDescription(list)
+          .setFooter({ text: `Showing up to 100 • Total members: ${humans.size}` })
+          .setColor(COLORS.muted)
+          .setTimestamp();
+
+        return message.channel.send({ embeds: [embed] });
+      }
+
+      const embed = new EmbedBuilder()
+        .setTitle("SERVER MEMBER STATUS")
+        .addFields(
+          { name: "Online", value: `**${onlineMembers.size}**`, inline: true },
+          { name: "Offline", value: `**${offlineMembers.size}**`, inline: true },
+          { name: "Total Humans", value: `**${humans.size}**`, inline: true }
+        )
+        .setColor(COLORS.primary)
+        .setTimestamp();
+
+      return message.channel.send({ embeds: [embed] });
     }
 
     if (commandName === "botinfo") {
@@ -848,6 +1093,13 @@ client.on("interactionCreate", async interaction => {
   try {
     if (interaction.isChatInputCommand()) {
       if (interaction.commandName !== "friendly") return;
+
+      if (!canHost(interaction.member)) {
+        return interaction.reply({
+          content: hostOnlyMessage(),
+          ephemeral: true
+        });
+      }
 
       const guildId = interaction.guildId;
 
@@ -913,7 +1165,7 @@ client.on("interactionCreate", async interaction => {
       game.activityMessageId = activity.id;
 
       await interaction.reply({
-        content: "Friendly created.",
+        content: `✦ Friendly created for **${needed} players**.`,
         ephemeral: true
       });
 
