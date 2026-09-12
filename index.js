@@ -12,9 +12,6 @@ const {
   Partials
 } = require("discord.js");
 
-const { Player } = require("discord-player");
-const { DefaultExtractors } = require("@discord-player/extractor");
-
 require("dotenv").config();
 
 const client = new Client({
@@ -24,8 +21,7 @@ const client = new Client({
     GatewayIntentBits.MessageContent,
     GatewayIntentBits.GuildMembers,
     GatewayIntentBits.GuildPresences,
-    GatewayIntentBits.GuildMessageReactions,
-    GatewayIntentBits.GuildVoiceStates
+    GatewayIntentBits.GuildMessageReactions
   ],
   partials: [
     Partials.Message,
@@ -34,20 +30,6 @@ const client = new Client({
     Partials.User
   ]
 });
-
-const player = new Player(client, {
-  ytdlOptions: {
-    quality: "highestaudio",
-    highWaterMark: 1 << 25
-  }
-});
-
-async function loadExtractors() {
-  await player.extractors.loadMulti(DefaultExtractors);
-  console.log("Music extractors loaded.");
-}
-
-// Do NOT manually register extractors. discord-player v7 handles YouTube by default.
 
 const games = new Map();       // guildId -> friendly game
 const scrims = new Map();      // guildId -> scrim
@@ -147,84 +129,28 @@ const lineupCommand = new SlashCommandBuilder()
   .setName("lineup")
   .setDescription("Start a 3-1-3 lineup picker (8 players)");
 
-// MUSIC COMMANDS
-const musicCommand = new SlashCommandBuilder()
-  .setName("music")
-  .setDescription("Play a song in voice chat (adds to queue)")
-  .addStringOption(option =>
-    option
-      .setName("link")
-      .setDescription("YouTube link")
-      .setRequired(true)
-  );
-
-const musicstopCommand = new SlashCommandBuilder()
-  .setName("musicstop")
-  .setDescription("Stop music, clear queue, and leave voice chat");
-
-const musicskipCommand = new SlashCommandBuilder()
-  .setName("musicskip")
-  .setDescription("Skip the current song and play the next in queue");
-
-const musicpauseCommand = new SlashCommandBuilder()
-  .setName("musicpause")
-  .setDescription("Pause the current song");
-
-const musicresumeCommand = new SlashCommandBuilder()
-  .setName("musicresume")
-  .setDescription("Resume the paused song");
-
-const musicqueueCommand = new SlashCommandBuilder()
-  .setName("musicqueue")
-  .setDescription("Show the current music queue");
-
-const musicnowCommand = new SlashCommandBuilder()
-  .setName("musicnow")
-  .setDescription("Show what is currently playing");
-
-const musicloopCommand = new SlashCommandBuilder()
-  .setName("musicloop")
-  .setDescription("Toggle loop for the current song");
-
-const musicclearCommand = new SlashCommandBuilder()
-  .setName("musicclear")
-  .setDescription("Clear the music queue (keeps current song)");
-
-client.once("clientReady", async () => {
+client.once("ready", async () => {
   console.log(`${client.user.tag} is online.`);
 
-  await loadExtractors();
+  try {
+    const rest = new REST({ version: "10" }).setToken(process.env.TOKEN);
 
-  (async () => {
-    try {
-      const rest = new REST({ version: "10" }).setToken(process.env.TOKEN);
+    await rest.put(
+      Routes.applicationCommands(client.user.id),
+      {
+        body: [
+          friendlyCommand.toJSON(),
+          scrimCommand.toJSON(),
+          activityCommand.toJSON(),
+          lineupCommand.toJSON()
+        ]
+      }
+    );
 
-      await rest.put(
-        Routes.applicationCommands(client.user.id),
-        {
-          body: [
-            friendlyCommand.toJSON(),
-            scrimCommand.toJSON(),
-            activityCommand.toJSON(),
-            lineupCommand.toJSON(),
-            musicCommand.toJSON(),
-            musicstopCommand.toJSON(),
-            musicskipCommand.toJSON(),
-            musicpauseCommand.toJSON(),
-            musicresumeCommand.toJSON(),
-            musicqueueCommand.toJSON(),
-            musicnowCommand.toJSON(),
-            musicloopCommand.toJSON(),
-            musicclearCommand.toJSON()
-          ]
-        }
-      );
-
-      console.log("Slash commands registered.");
-    } catch (error) {
-      console.error("Slash registration error:", error);
-    }
-  })();
+    console.log("Slash commands registered.");
+  } catch (error) {
+    console.error("Slash registration error:", error);
+  }
 });
 
 // FRIENDLY EMBEDS & BUTTONS
@@ -576,12 +502,6 @@ client.on("messageCreate", async message => {
           "`/scrim` — start a 7v7 scrim (3-1-2 both teams)",
           "`/activity <needed>` — activity check for Real Betis",
           "`/lineup` — 3-1-3 lineup picker (8 players)",
-          "`/music <link>` — play music in VC (loop + queue)",
-          "`/musicstop` — stop & leave VC",
-          "`/musicskip` — skip current track",
-          "`/musicpause` / `/musicresume`",
-          "`/musicqueue` / `/musicnow`",
-          "`/musicloop` / `/musicclear`",
           "",
           "### 🛡️ MODERATION",
           "`?purge <amount>` `?clear <amount>`",
@@ -602,7 +522,7 @@ client.on("messageCreate", async message => {
           "`?topic <text>`",
           "",
           "### ✦ FRIENDLY ACCESS",
-          `Only **${HOSTER_ROLE}** or members with **Administrator** can use \`/friendly\`, \`/scrim\`, \`/lineup\`, and music commands.`
+          `Only **${HOSTER_ROLE}** or members with **Administrator** can use \`/friendly\`, \`/scrim\`, and \`/lineup\`.`
         ].join("\n")
       );
 
@@ -1109,25 +1029,6 @@ client.on("messageCreate", async message => {
 // INTERACTIONS (SLASH + BUTTONS)
 client.on("interactionCreate", async interaction => {
   try {
-    // MUSIC COMMANDS FIRST
-    if (
-      interaction.isChatInputCommand() &&
-      [
-        "music",
-        "musicstop",
-        "musicskip",
-        "musicpause",
-        "musicresume",
-        "musicqueue",
-        "musicnow",
-        "musicloop",
-        "musicclear"
-      ].includes(interaction.commandName)
-    ) {
-      await handleMusicInteractions(interaction);
-      return;
-    }
-
     if (interaction.isChatInputCommand()) {
       // FRIENDLY
       if (interaction.commandName === "friendly") {
@@ -1724,6 +1625,7 @@ client.on("messageReactionAdd", async (reaction, user) => {
   if (!activity || message.id !== activity.messageId) return;
   if (activity.completed) return;
 
+  // Only count 🔥
   if (reaction.emoji.name !== "🔥") return;
 
   if (!activity.reacted.has(user.id)) {
@@ -1765,310 +1667,5 @@ client.on("messageReactionRemove", async (reaction, user) => {
     await message.edit({ embeds: [createActivityCheckEmbed(activity)] });
   } catch {}
 });
-
-/* =========================
-   MUSIC HANDLER (discord-player)
-   ========================= */
-
-async function handleMusicInteractions(interaction) {
-  if (!interaction.isChatInputCommand()) return;
-
-  const guildId = interaction.guildId;
-  const member = interaction.member;
-  const command = interaction.commandName;
-
-  const musicCommands = [
-    "music",
-    "musicstop",
-    "musicskip",
-    "musicpause",
-    "musicresume",
-    "musicqueue",
-    "musicnow",
-    "musicloop",
-    "musicclear"
-  ];
-
-  if (!musicCommands.includes(command)) return;
-
-  const requiresVC = [
-    "music",
-    "musicstop",
-    "musicskip",
-    "musicpause",
-    "musicresume",
-    "musicloop",
-    "musicclear"
-  ];
-
-  if (requiresVC.includes(command) && !member?.voice?.channel) {
-    return interaction.reply({
-      content: "You need to be in a voice channel to use this command.",
-      ephemeral: true
-    });
-  }
-
-  const queue = player.queues.get(guildId);
-
-  if (command === "music") {
-    if (!canHost(interaction.member)) {
-      return interaction.reply({
-        content: hostOnlyMessage(),
-        ephemeral: true
-      });
-    }
-
-    const link = interaction.options.getString("link", true).trim();
-
-    if (!link) {
-      return interaction.reply({
-        content: "You must provide a YouTube link.",
-        ephemeral: true
-      });
-    }
-
-    try {
-      const result = await player.play(member.voice.channel, link, {
-        requestedBy: interaction.user,
-        nodeOptions: {
-          metadata: {
-            channel: interaction.channel,
-            requestedBy: interaction.user
-          }
-        }
-      });
-
-      if (!result || !result.track) {
-        return interaction.reply({
-          content: "I couldn't find anything to play from that link.",
-          ephemeral: true
-        });
-      }
-
-      return interaction.reply({
-        content: `Now playing: **${result.track.title}**`,
-        ephemeral: false
-      });
-    } catch (err) {
-      console.error("Music error:", err);
-
-      return interaction.reply({
-        content: "Failed to play that link. Check the Railway logs for the exact error.",
-        ephemeral: true
-      });
-    }
-  }
-
-  if (command === "musicstop") {
-    if (!canHost(interaction.member)) {
-      return interaction.reply({
-        content: hostOnlyMessage(),
-        ephemeral: true
-      });
-    }
-
-    if (!queue) {
-      return interaction.reply({
-        content: "No music is currently playing.",
-        ephemeral: true
-      });
-    }
-
-    queue.delete();
-
-    return interaction.reply({
-      content: "Music stopped, queue cleared, and left voice channel.",
-      ephemeral: false
-    });
-  }
-
-  if (command === "musicskip") {
-    if (!canHost(interaction.member)) {
-      return interaction.reply({
-        content: hostOnlyMessage(),
-        ephemeral: true
-      });
-    }
-
-    if (!queue || !queue.currentTrack) {
-      return interaction.reply({
-        content: "No music is currently playing.",
-        ephemeral: true
-      });
-    }
-
-    queue.node.skip();
-
-    return interaction.reply({
-      content: "Skipped current track.",
-      ephemeral: false
-    });
-  }
-
-  if (command === "musicpause") {
-    if (!canHost(interaction.member)) {
-      return interaction.reply({
-        content: hostOnlyMessage(),
-        ephemeral: true
-      });
-    }
-
-    if (!queue || !queue.currentTrack) {
-      return interaction.reply({
-        content: "No music is currently playing.",
-        ephemeral: true
-      });
-    }
-
-    if (queue.node.isPaused()) {
-      return interaction.reply({
-        content: "Music is already paused.",
-        ephemeral: true
-      });
-    }
-
-    queue.node.setPaused(true);
-
-    return interaction.reply({
-      content: "Music paused.",
-      ephemeral: false
-    });
-  }
-
-  if (command === "musicresume") {
-    if (!canHost(interaction.member)) {
-      return interaction.reply({
-        content: hostOnlyMessage(),
-        ephemeral: true
-      });
-    }
-
-    if (!queue || !queue.currentTrack) {
-      return interaction.reply({
-        content: "No music is currently playing.",
-        ephemeral: true
-      });
-    }
-
-    if (!queue.node.isPaused()) {
-      return interaction.reply({
-        content: "Music is not paused.",
-        ephemeral: true
-      });
-    }
-
-    queue.node.setPaused(false);
-
-    return interaction.reply({
-      content: "Music resumed.",
-      ephemeral: false
-    });
-  }
-
-  if (command === "musicqueue") {
-    if (!queue || (!queue.currentTrack && queue.tracks.size === 0)) {
-      return interaction.reply({
-        content: "The queue is empty.",
-        ephemeral: true
-      });
-    }
-
-    const lines = [];
-
-    if (queue.currentTrack) {
-      lines.push(`**Now playing:** ${queue.currentTrack.title}`);
-    }
-
-    if (queue.tracks.size > 0) {
-      lines.push("");
-      lines.push("**Queue:**");
-
-      queue.tracks.slice(0, 10).forEach((track, i) => {
-        lines.push(`${i + 1}. ${track.title}`);
-      });
-
-      if (queue.tracks.size > 10) {
-        lines.push(`...and ${queue.tracks.size - 10} more.`);
-      }
-    }
-
-    return interaction.reply({
-      content: lines.join("\n"),
-      ephemeral: false
-    });
-  }
-
-  if (command === "musicnow") {
-    if (!queue || !queue.currentTrack) {
-      return interaction.reply({
-        content: "No music is currently playing.",
-        ephemeral: true
-      });
-    }
-
-    const status = queue.node.isPaused()
-      ? "(paused)"
-      : "(playing)";
-
-    return interaction.reply({
-      content: `Now playing: **${queue.currentTrack.title}** ${status}`,
-      ephemeral: false
-    });
-  }
-
-  if (command === "musicloop") {
-    if (!canHost(interaction.member)) {
-      return interaction.reply({
-        content: hostOnlyMessage(),
-        ephemeral: true
-      });
-    }
-
-    if (!queue || !queue.currentTrack) {
-      return interaction.reply({
-        content: "No music is currently playing.",
-        ephemeral: true
-      });
-    }
-
-    const newMode = queue.repeatMode === 0 ? 1 : 0;
-
-    queue.setRepeatMode(newMode);
-
-    return interaction.reply({
-      content: newMode
-        ? "Loop enabled for the current song."
-        : "Loop disabled.",
-      ephemeral: false
-    });
-  }
-
-  if (command === "musicclear") {
-    if (!canHost(interaction.member)) {
-      return interaction.reply({
-        content: hostOnlyMessage(),
-        ephemeral: true
-      });
-    }
-
-    if (!queue) {
-      return interaction.reply({
-        content: "No music is currently active.",
-        ephemeral: true
-      });
-    }
-
-    const count = queue.tracks.size;
-
-    queue.tracks.clear();
-
-    return interaction.reply({
-      content: count
-        ? `Cleared ${count} track(s) from the queue.`
-        : "The queue was already empty.",
-      ephemeral: false
-    });
-  }
-}
 
 client.login(process.env.TOKEN);
