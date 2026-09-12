@@ -12,6 +12,15 @@ const {
   Partials
 } = require("discord.js");
 
+const {
+  joinVoiceChannel,
+  createAudioPlayer,
+  createAudioResource,
+  AudioPlayerStatus
+} = require("@discordjs/voice");
+
+const playDL = require("play-dl");
+
 require("dotenv").config();
 
 const client = new Client({
@@ -21,7 +30,8 @@ const client = new Client({
     GatewayIntentBits.MessageContent,
     GatewayIntentBits.GuildMembers,
     GatewayIntentBits.GuildPresences,
-    GatewayIntentBits.GuildMessageReactions
+    GatewayIntentBits.GuildMessageReactions,
+    GatewayIntentBits.GuildVoiceStates
   ],
   partials: [
     Partials.Message,
@@ -35,6 +45,7 @@ const games = new Map();       // guildId -> friendly game
 const scrims = new Map();      // guildId -> scrim
 const activities = new Map();  // guildId -> activity check
 const lineups = new Map();     // guildId -> lineup (3-1-3)
+const musicState = new Map();  // guildId -> { connection, player, queue, current, loop, paused }
 
 const PREFIX = "?";
 const HOSTER_ROLE = "〔✦〕FF Hoster";
@@ -129,6 +140,49 @@ const lineupCommand = new SlashCommandBuilder()
   .setName("lineup")
   .setDescription("Start a 3-1-3 lineup picker (8 players)");
 
+// MUSIC COMMANDS
+const musicCommand = new SlashCommandBuilder()
+  .setName("music")
+  .setDescription("Play a song in voice chat (adds to queue)")
+  .addStringOption(option =>
+    option
+      .setName("link")
+      .setDescription("YouTube or supported link")
+      .setRequired(true)
+  );
+
+const musicstopCommand = new SlashCommandBuilder()
+  .setName("musicstop")
+  .setDescription("Stop music, clear queue, and leave voice chat");
+
+const musicskipCommand = new SlashCommandBuilder()
+  .setName("musicskip")
+  .setDescription("Skip the current song and play the next in queue");
+
+const musicpauseCommand = new SlashCommandBuilder()
+  .setName("musicpause")
+  .setDescription("Pause the current song");
+
+const musicresumeCommand = new SlashCommandBuilder()
+  .setName("musicresume")
+  .setDescription("Resume the paused song");
+
+const musicqueueCommand = new SlashCommandBuilder()
+  .setName("musicqueue")
+  .setDescription("Show the current music queue");
+
+const musicnowCommand = new SlashCommandBuilder()
+  .setName("musicnow")
+  .setDescription("Show what is currently playing");
+
+const musicloopCommand = new SlashCommandBuilder()
+  .setName("musicloop")
+  .setDescription("Toggle loop for the current song");
+
+const musicclearCommand = new SlashCommandBuilder()
+  .setName("musicclear")
+  .setDescription("Clear the music queue (keeps current song)");
+
 client.once("ready", async () => {
   console.log(`${client.user.tag} is online.`);
 
@@ -142,7 +196,16 @@ client.once("ready", async () => {
           friendlyCommand.toJSON(),
           scrimCommand.toJSON(),
           activityCommand.toJSON(),
-          lineupCommand.toJSON()
+          lineupCommand.toJSON(),
+          musicCommand.toJSON(),
+          musicstopCommand.toJSON(),
+          musicskipCommand.toJSON(),
+          musicpauseCommand.toJSON(),
+          musicresumeCommand.toJSON(),
+          musicqueueCommand.toJSON(),
+          musicnowCommand.toJSON(),
+          musicloopCommand.toJSON(),
+          musicclearCommand.toJSON()
         ]
       }
     );
@@ -502,6 +565,12 @@ client.on("messageCreate", async message => {
           "`/scrim` — start a 7v7 scrim (3-1-2 both teams)",
           "`/activity <needed>` — activity check for Real Betis",
           "`/lineup` — 3-1-3 lineup picker (8 players)",
+          "`/music <link>` — play music in VC (loop + queue)",
+          "`/musicstop` — stop & leave VC",
+          "`/musicskip` — skip current track",
+          "`/musicpause` / `/musicresume`",
+          "`/musicqueue` / `/musicnow`",
+          "`/musicloop` / `/musicclear`",
           "",
           "### 🛡️ MODERATION",
           "`?purge <amount>` `?clear <amount>`",
@@ -522,7 +591,7 @@ client.on("messageCreate", async message => {
           "`?topic <text>`",
           "",
           "### ✦ FRIENDLY ACCESS",
-          `Only **${HOSTER_ROLE}** or members with **Administrator** can use \`/friendly\`, \`/scrim\`, and \`/lineup\`.`
+          `Only **${HOSTER_ROLE}** or members with **Administrator** can use \`/friendly\`, \`/scrim\`, \`/lineup\`, and music commands.`
         ].join("\n")
       );
 
@@ -1029,6 +1098,25 @@ client.on("messageCreate", async message => {
 // INTERACTIONS (SLASH + BUTTONS)
 client.on("interactionCreate", async interaction => {
   try {
+    // MUSIC COMMANDS FIRST
+    if (
+      interaction.isChatInputCommand() &&
+      [
+        "music",
+        "musicstop",
+        "musicskip",
+        "musicpause",
+        "musicresume",
+        "musicqueue",
+        "musicnow",
+        "musicloop",
+        "musicclear"
+      ].includes(interaction.commandName)
+    ) {
+      await handleMusicInteractions(interaction);
+      return;
+    }
+
     if (interaction.isChatInputCommand()) {
       // FRIENDLY
       if (interaction.commandName === "friendly") {
@@ -1625,7 +1713,6 @@ client.on("messageReactionAdd", async (reaction, user) => {
   if (!activity || message.id !== activity.messageId) return;
   if (activity.completed) return;
 
-  // Only count 🔥
   if (reaction.emoji.name !== "🔥") return;
 
   if (!activity.reacted.has(user.id)) {
@@ -1667,5 +1754,348 @@ client.on("messageReactionRemove", async (reaction, user) => {
     await message.edit({ embeds: [createActivityCheckEmbed(activity)] });
   } catch {}
 });
+
+/* =========================
+   MUSIC HANDLER FUNCTION
+   This is called from interactionCreate for music commands
+   ========================= */
+
+async function handleMusicInteractions(interaction) {
+  if (!interaction.isChatInputCommand()) return;
+
+  const guildId = interaction.guildId;
+  const member = interaction.member;
+
+  if (
+    !member?.voice?.channelId &&
+    interaction.commandName !== "musicstop" &&
+    interaction.commandName !== "musicqueue" &&
+    interaction.commandName !== "musicnow"
+  ) {
+    return interaction.reply({
+      content: "You need to be in a voice channel to use music commands.",
+      ephemeral: true
+    });
+  }
+
+  const voiceChannel = member?.voice?.channel;
+  let state = musicState.get(guildId);
+
+  function ensurePlayer() {
+    if (!state) {
+      state = {
+        connection: null,
+        player: createAudioPlayer(),
+        queue: [],
+        current: null,
+        loop: false,
+        paused: false
+      };
+      musicState.set(guildId, state);
+
+      state.player.on(AudioPlayerStatus.Idle, () => {
+        onTrackEnd(guildId);
+      });
+    }
+
+    if (!state.connection) {
+      state.connection = joinVoiceChannel({
+        channelId: voiceChannel.id,
+        guildId: interaction.guildId,
+        adapterCreator: interaction.guild.voiceAdapterCreator
+      });
+
+      state.connection.subscribe(state.player);
+    }
+
+    return state;
+  }
+
+  async function playNext(guildId) {
+    const st = musicState.get(guildId);
+    if (!st) return;
+
+    if (st.queue.length === 0) {
+      stopMusic(guildId);
+      return;
+    }
+
+    const next = st.queue.shift();
+    st.current = next;
+
+    try {
+      const info = await playDL.video_info(next.url);
+      const stream = await playDL.stream_from_info(info);
+      const resource = createAudioResource(stream.stream, {
+        inputType: stream.type
+      });
+
+      st.player.play(resource);
+    } catch (err) {
+      console.error("Music play error:", err);
+      playNext(guildId);
+    }
+  }
+
+  function onTrackEnd(guildId) {
+    const st = musicState.get(guildId);
+    if (!st) return;
+
+    if (st.loop && st.current) {
+      st.queue.unshift(st.current);
+    }
+
+    st.current = null;
+    playNext(guildId);
+  }
+
+  function stopMusic(guildId) {
+    const st = musicState.get(guildId);
+    if (!st) return;
+
+    try {
+      st.player.stop();
+    } catch {}
+
+    st.queue = [];
+    st.current = null;
+    st.loop = false;
+    st.paused = false;
+
+    if (st.connection) {
+      st.connection.destroy();
+      st.connection = null;
+    }
+
+    musicState.delete(guildId);
+  }
+
+  // /music
+  if (interaction.commandName === "music") {
+    if (!canHost(interaction.member)) {
+      return interaction.reply({ content: hostOnlyMessage(), ephemeral: true });
+    }
+
+    const link = interaction.options.getString("link");
+    if (!link) {
+      return interaction.reply({
+        content: "You must provide a link.",
+        ephemeral: true
+      });
+    }
+
+    ensurePlayer();
+
+    if (!state.current && state.queue.length === 0) {
+      state.queue.push({ url: link, requestedBy: interaction.user.id });
+      await interaction.deferReply();
+      try {
+        await playNext(guildId);
+        return interaction.editReply(`Now playing: ${link}`);
+      } catch (e) {
+        console.error(e);
+        return interaction.editReply("Failed to play that link.");
+      }
+    } else {
+      state.queue.push({ url: link, requestedBy: interaction.user.id });
+      return interaction.reply({
+        content: `Added to queue: ${link}`,
+        ephemeral: false
+      });
+    }
+  }
+
+  // /musicstop
+  if (interaction.commandName === "musicstop") {
+    if (!canHost(interaction.member)) {
+      return interaction.reply({ content: hostOnlyMessage(), ephemeral: true });
+    }
+
+    if (!state) {
+      return interaction.reply({
+        content: "No music is currently playing in this server.",
+        ephemeral: true
+      });
+    }
+
+    stopMusic(guildId);
+    return interaction.reply({
+      content: "Music stopped, queue cleared, and left voice channel.",
+      ephemeral: false
+    });
+  }
+
+  // /musicskip
+  if (interaction.commandName === "musicskip") {
+    if (!canHost(interaction.member)) {
+      return interaction.reply({ content: hostOnlyMessage(), ephemeral: true });
+    }
+
+    if (!state || (!state.current && state.queue.length === 0)) {
+      return interaction.reply({
+        content: "No music is currently playing or queued.",
+        ephemeral: true
+      });
+    }
+
+    state.player.stop();
+    return interaction.reply({
+      content: "Skipped current track.",
+      ephemeral: false
+    });
+  }
+
+  // /musicpause
+  if (interaction.commandName === "musicpause") {
+    if (!canHost(interaction.member)) {
+      return interaction.reply({ content: hostOnlyMessage(), ephemeral: true });
+    }
+
+    if (!state || !state.current) {
+      return interaction.reply({
+        content: "No music is currently playing.",
+        ephemeral: true
+      });
+    }
+
+    if (state.paused) {
+      return interaction.reply({
+        content: "Music is already paused.",
+        ephemeral: true
+      });
+    }
+
+    state.player.pause();
+    state.paused = true;
+    return interaction.reply({
+      content: "Music paused.",
+      ephemeral: false
+    });
+  }
+
+  // /musicresume
+  if (interaction.commandName === "musicresume") {
+    if (!canHost(interaction.member)) {
+      return interaction.reply({ content: hostOnlyMessage(), ephemeral: true });
+    }
+
+    if (!state || !state.current) {
+      return interaction.reply({
+        content: "No music is currently playing.",
+        ephemeral: true
+      });
+    }
+
+    if (!state.paused) {
+      return interaction.reply({
+        content: "Music is not paused.",
+        ephemeral: true
+      });
+    }
+
+    state.player.unpause();
+    state.paused = false;
+    return interaction.reply({
+      content: "Music resumed.",
+      ephemeral: false
+    });
+  }
+
+  // /musicqueue
+  if (interaction.commandName === "musicqueue") {
+    const st = musicState.get(guildId);
+    if (!st || (st.queue.length === 0 && !st.current)) {
+      return interaction.reply({
+        content: "The queue is empty.",
+        ephemeral: true
+      });
+    }
+
+    const lines = [];
+    if (st.current) {
+      lines.push(`**Now playing:** ${st.current.url}`);
+    }
+
+    if (st.queue.length) {
+      lines.push("**Queue:**");
+      st.queue.slice(0, 10).forEach((item, i) => {
+        lines.push(`${i + 1}. ${item.url}`);
+      });
+      if (st.queue.length > 10) {
+        lines.push(`...and ${st.queue.length - 10} more.`);
+      }
+    }
+
+    return interaction.reply({
+      content: lines.join("\n"),
+      ephemeral: false
+    });
+  }
+
+  // /musicnow
+  if (interaction.commandName === "musicnow") {
+    const st = musicState.get(guildId);
+    if (!st || !st.current) {
+      return interaction.reply({
+        content: "No music is currently playing.",
+        ephemeral: true
+      });
+    }
+
+    const status = st.paused ? "(paused)" : "(playing)";
+    return interaction.reply({
+      content: `Now playing: ${st.current.url} ${status}`,
+      ephemeral: false
+    });
+  }
+
+  // /musicloop
+  if (interaction.commandName === "musicloop") {
+    if (!canHost(interaction.member)) {
+      return interaction.reply({ content: hostOnlyMessage(), ephemeral: true });
+    }
+
+    const st = musicState.get(guildId);
+    if (!st || !st.current) {
+      return interaction.reply({
+        content: "No music is currently playing.",
+        ephemeral: true
+      });
+    }
+
+    st.loop = !st.loop;
+    return interaction.reply({
+      content: st.loop
+        ? "Loop enabled for current song."
+        : "Loop disabled.",
+      ephemeral: false
+    });
+  }
+
+  // /musicclear
+  if (interaction.commandName === "musicclear") {
+    if (!canHost(interaction.member)) {
+      return interaction.reply({ content: hostOnlyMessage(), ephemeral: true });
+    }
+
+    const st = musicState.get(guildId);
+    if (!st) {
+      return interaction.reply({
+        content: "No music is currently active.",
+        ephemeral: true
+      });
+    }
+
+    const count = st.queue.length;
+    st.queue = [];
+
+    return interaction.reply({
+      content: count
+        ? `Cleared ${count} track(s) from the queue.`
+        : "Queue was already empty.",
+      ephemeral: false
+    });
+  }
+}
 
 client.login(process.env.TOKEN);
