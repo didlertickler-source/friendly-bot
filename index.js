@@ -149,7 +149,7 @@ const musicCommand = new SlashCommandBuilder()
   .addStringOption(option =>
     option
       .setName("link")
-      .setDescription("YouTube or supported link")
+      .setDescription("YouTube link")
       .setRequired(true)
   );
 
@@ -1860,18 +1860,13 @@ async function handleMusicInteractions(interaction) {
     st.paused = false;
 
     try {
-      const streamInfo = await playDL.play(next.url, {
-        type: "youtube",
-        quality: "highaudio",
-        language: "en"
+      // Get stream directly from play-dl
+      const stream = await playDL.stream(next.url, {
+        quality: "highaudio"
       });
 
-      if (!streamInfo || !streamInfo.stream) {
-        throw new Error("No stream returned from play-dl");
-      }
-
-      const resource = createAudioResource(streamInfo.stream, {
-        inputType: streamInfo.type,
+      const resource = createAudioResource(stream.stream, {
+        inputType: stream.type,
         volume: true
       });
 
