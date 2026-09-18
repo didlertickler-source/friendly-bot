@@ -938,14 +938,19 @@ client.on("interactionCreate", async interaction => {
 
         games.set(guildId, game);
 
-        const activity = await interaction.channel.send({
-          content: "@everyone",
-          embeds: [createActivityEmbed(game)],
-          components: [activityButtons()]
-        });
+        try {
+          const activity = await interaction.channel.send({
+            content: null, // no @everyone ping
+            embeds: [createActivityEmbed(game)],
+            components: [activityButtons()]
+          });
 
-        game.activityMessageId = activity.id;
-        registerPanel(activity, guildId, "friendly");
+          game.activityMessageId = activity.id;
+          registerPanel(activity, guildId, "friendly");
+        } catch (err) {
+          console.error("Failed to create friendly panel:", err);
+          return interaction.reply({ content: "I don't have permission to post panels in this channel.", ephemeral: true });
+        }
 
         await interaction.reply({
           content: `✦ Friendly created for **${needed} players**.`,
@@ -981,14 +986,19 @@ client.on("interactionCreate", async interaction => {
 
         scrims.set(scrimKey, scrim);
 
-        const msg = await interaction.channel.send({
-          content: "@everyone",
-          embeds: [createScrimEmbed(scrim)],
-          components: createScrimButtons(scrim)
-        });
+        try {
+          const msg = await interaction.channel.send({
+            content: null,
+            embeds: [createScrimEmbed(scrim)],
+            components: createScrimButtons(scrim)
+          });
 
-        scrim.messageId = msg.id;
-        registerPanel(msg, guildId, "scrim");
+          scrim.messageId = msg.id;
+          registerPanel(msg, guildId, "scrim");
+        } catch (err) {
+          console.error("Failed to create scrim panel:", err);
+          return interaction.reply({ content: "I don't have permission to post panels in this channel.", ephemeral: true });
+        }
 
         await interaction.reply({
           content: "✦ 7v7 scrim created (3-1-2 for both teams).",
@@ -1018,16 +1028,21 @@ client.on("interactionCreate", async interaction => {
 
         activities.set(guildId, activity);
 
-        const msg = await interaction.channel.send({
-          content: "@everyone",
-          embeds: [createActivityCheckEmbed(activity)]
-        });
+        try {
+          const msg = await interaction.channel.send({
+            content: null,
+            embeds: [createActivityCheckEmbed(activity)]
+          });
 
-        activity.messageId = msg.id;
-        activity.guildId = guildId;
-        registerPanel(msg, guildId, "activity");
+          activity.messageId = msg.id;
+          activity.guildId = guildId;
+          registerPanel(msg, guildId, "activity");
 
-        await msg.react("🔥");
+          await msg.react("🔥");
+        } catch (err) {
+          console.error("Failed to create activity check:", err);
+          return interaction.reply({ content: "I don't have permission to post panels in this channel.", ephemeral: true });
+        }
 
         await interaction.reply({
           content: "✦ Activity check started.",
@@ -1061,14 +1076,19 @@ client.on("interactionCreate", async interaction => {
 
         lineups.set(guildId, lineupObj);
 
-        const msg = await interaction.channel.send({
-          content: "@everyone",
-          embeds: [createLineup8Embed(lineupObj)],
-          components: createLineup8Buttons(lineupObj)
-        });
+        try {
+          const msg = await interaction.channel.send({
+            content: null,
+            embeds: [createLineup8Embed(lineupObj)],
+            components: createLineup8Buttons(lineupObj)
+          });
 
-        lineupObj.messageId = msg.id;
-        registerPanel(msg, guildId, "lineup");
+          lineupObj.messageId = msg.id;
+          registerPanel(msg, guildId, "lineup");
+        } catch (err) {
+          console.error("Failed to create lineup panel:", err);
+          return interaction.reply({ content: "I don't have permission to post panels in this channel.", ephemeral: true });
+        }
 
         await interaction.reply({
           content: `✦ ${(formations[lineupObj.needed] || formations[8]).name} lineup created (${lineupObj.needed} players).`,
@@ -1098,20 +1118,24 @@ client.on("interactionCreate", async interaction => {
         if (game.locked) return interaction.reply({ content: "This friendly is already locked.", ephemeral: true });
         game.players.add(interaction.user.id);
 
-        const activity = await interaction.channel.messages.fetch(game.activityMessageId);
-        await activity.edit({
-          embeds: [createActivityEmbed(game)],
-          components: [activityButtons()]
-        });
+        try {
+          const activity = await interaction.channel.messages.fetch(game.activityMessageId);
+          await activity.edit({
+            embeds: [createActivityEmbed(game)],
+            components: [activityButtons()]
+          });
+        } catch {}
 
         if (game.players.size >= game.needed && !game.lineupStarted) {
           game.lineupStarted = true;
-          const lineup = await interaction.channel.send({
-            embeds: [createLineupEmbed(game)],
-            components: createLineupButtons(game)
-          });
-          game.lineupMessageId = lineup.id;
-          registerPanel(lineup, guildId, "friendly-lineup");
+          try {
+            const lineup = await interaction.channel.send({
+              embeds: [createLineupEmbed(game)],
+              components: createLineupButtons(game)
+            });
+            game.lineupMessageId = lineup.id;
+            registerPanel(lineup, guildId, "friendly-lineup");
+          } catch {}
         }
 
         return interaction.reply({ content: "You are marked as available.", ephemeral: true });
@@ -1127,11 +1151,13 @@ client.on("interactionCreate", async interaction => {
           }
         }
 
-        const activity = await interaction.channel.messages.fetch(game.activityMessageId);
-        await activity.edit({
-          embeds: [createActivityEmbed(game)],
-          components: [activityButtons()]
-        });
+        try {
+          const activity = await interaction.channel.messages.fetch(game.activityMessageId);
+          await activity.edit({
+            embeds: [createActivityEmbed(game)],
+            components: [activityButtons()]
+          });
+        } catch {}
 
         if (game.lineupMessageId) {
           try {
@@ -1166,11 +1192,13 @@ client.on("interactionCreate", async interaction => {
         game.locked = false;
         game.subMode = false;
 
-        const activity = await interaction.channel.messages.fetch(game.activityMessageId);
-        await activity.edit({
-          embeds: [createActivityEmbed(game)],
-          components: [activityButtons()]
-        });
+        try {
+          const activity = await interaction.channel.messages.fetch(game.activityMessageId);
+          await activity.edit({
+            embeds: [createActivityEmbed(game)],
+            components: [activityButtons()]
+          });
+        } catch {}
 
         if (game.lineupMessageId) {
           try {
@@ -1342,8 +1370,8 @@ client.on("interactionCreate", async interaction => {
       }
 
       if (interaction.customId.startsWith("scrim_pos_")) {
-        const parts = interaction.customId.split("_"); // ["scrim","pos","A","GK"]
-        const teamLabel = parts[2]; // "A" or "B"
+        const parts = interaction.customId.split("_");
+        const teamLabel = parts[2];
         const position = parts.slice(3).join("_");
 
         if (!SCRIM_FORMATION_7.positions.includes(position)) return interaction.reply({ content: "Invalid scrim position.", ephemeral: true });
@@ -1417,7 +1445,6 @@ client.on("interactionCreate", async interaction => {
 
         if (currentPlayer) {
           if (currentPlayer === interaction.user.id) {
-            // leave position
             lineupObj.positions.delete(position);
           } else {
             return interaction.reply({
@@ -1426,7 +1453,6 @@ client.on("interactionCreate", async interaction => {
             });
           }
         } else {
-          // take position exclusively
           moveExclusive(lineupObj.positions, interaction.user.id, position);
         }
 
@@ -1463,7 +1489,6 @@ client.on("messageReactionAdd", async (reaction, user) => {
   if (!activity || message.id !== activity.messageId) return;
   if (activity.completed) return;
 
-  // Only count 🔥
   if (reaction.emoji.name !== "🔥") return;
 
   if (!activity.reacted.has(user.id)) {
