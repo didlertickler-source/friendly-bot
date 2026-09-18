@@ -34,8 +34,8 @@ const client = new Client({
 const games = new Map();       // guildId -> friendly game
 const scrims = new Map();      // guildId -> scrim
 const activities = new Map();  // guildId -> activity check
-const lineups = new Map();
-const lifecycle = new Map();
+const lineups = new Map();     // guildId -> lineup
+const lifecycle = new Map();   // messageId -> panel info
 
 const PREFIX = "?";
 const HOSTER_ROLE = "〔✦〕FF Hoster";
@@ -387,18 +387,18 @@ client.on("messageCreate", async message => {
         "`?ping` `?uptime` `?botinfo` `?teamrank XI` `?serverinfo` `?userinfo` `?avatar`",
         "`?poll` `?choose` `?coinflip` `?8ball` `?random`"
       ];
-      return message.reply({ embeds: [makeEmbed("COMMAND CENTER", help.join("\\n"))] });
+      return message.reply({ embeds: [makeEmbed("COMMAND CENTER", help.join("\n"))] });
     }
 
     if (commandName === "formations" || commandName === "formation") {
-      const list = Object.values(formations).map(f => `**${f.name}** — ${f.positions.length} players — ${f.positions.join(" • ")}`).join("\\n");
+      const list = Object.values(formations).map(f => `**${f.name}** — ${f.positions.length} players — ${f.positions.join(" • ")}`).join("\n");
       return message.reply({ embeds: [makeEmbed("AVAILABLE FORMATIONS", list)] });
     }
 
     if (commandName === "matchstatus" || commandName === "status") {
       const guildId = message.guild.id;
       const game = games.get(guildId), scrim = scrims.get(`${guildId}_scrim`), activity = activities.get(guildId), lineup = lineups.get(guildId);
-      return message.reply({ embeds: [makeEmbed("LIVE OPERATIONS", [`Friendly: ${game ? `${game.players.size}/${game.needed}` : "none"}`, `Scrim: ${scrim ? `${scrim.teamA.size + scrim.teamB.size}/14` : "none"}`, `Activity: ${activity ? `${activity.reacted.size}/${activity.needed}` : "none"}`, `Lineup: ${lineup ? `${lineup.positions.size}/${(formations[lineup.needed] || formations[8]).positions.length}` : "none"}`].join("\\n"))] });
+      return message.reply({ embeds: [makeEmbed("LIVE OPERATIONS", [`Friendly: ${game ? `${game.players.size}/${game.needed}` : "none"}`, `Scrim: ${scrim ? `${scrim.teamA.size + scrim.teamB.size}/14` : "none"}`, `Activity: ${activity ? `${activity.reacted.size}/${activity.needed}` : "none"}`, `Lineup: ${lineup ? `${lineup.positions.size}/${(formations[lineup.needed] || formations[8]).positions.length}` : "none"}`].join("\n"))] });
     }
 
     if (["closefriendly", "closescrim", "closeactivity", "closelineup"].includes(commandName)) {
@@ -941,14 +941,14 @@ client.on("interactionCreate", async interaction => {
         const activity = await interaction.channel.send({
           content: "@everyone",
           embeds: [createActivityEmbed(game)],
-          components: [activityButtons(game)]
+          components: [activityButtons()]
         });
 
         game.activityMessageId = activity.id;
         registerPanel(activity, guildId, "friendly");
 
         await interaction.reply({
-          content: `âœ¦ Friendly created for **${needed} players**.`,
+          content: `✦ Friendly created for **${needed} players**.`,
           ephemeral: true
         });
 
@@ -991,7 +991,7 @@ client.on("interactionCreate", async interaction => {
         registerPanel(msg, guildId, "scrim");
 
         await interaction.reply({
-          content: "âœ¦ 7v7 scrim created (3-1-2 for both teams).",
+          content: "✦ 7v7 scrim created (3-1-2 for both teams).",
           ephemeral: false
         });
 
@@ -1030,14 +1030,14 @@ client.on("interactionCreate", async interaction => {
         await msg.react("🔥");
 
         await interaction.reply({
-          content: "âœ¦ Activity check started.",
+          content: "✦ Activity check started.",
           ephemeral: false
         });
 
         return;
       }
 
-      // LINEUP 3-1-3
+      // LINEUP
       if (interaction.commandName === "lineup") {
         if (!canHost(interaction.member)) {
           return interaction.reply({ content: hostOnlyMessage(), ephemeral: true });
@@ -1071,7 +1071,7 @@ client.on("interactionCreate", async interaction => {
         registerPanel(msg, guildId, "lineup");
 
         await interaction.reply({
-          content: "âœ¦ 3-1-3 lineup created (8 players).",
+          content: `✦ ${(formations[lineupObj.needed] || formations[8]).name} lineup created (${lineupObj.needed} players).`,
           ephemeral: false
         });
 
@@ -1095,12 +1095,13 @@ client.on("interactionCreate", async interaction => {
       )
     ) {
       if (interaction.customId === "friendly_play") {
+        if (game.locked) return interaction.reply({ content: "This friendly is already locked.", ephemeral: true });
         game.players.add(interaction.user.id);
 
         const activity = await interaction.channel.messages.fetch(game.activityMessageId);
         await activity.edit({
           embeds: [createActivityEmbed(game)],
-          components: [activityButtons(game)]
+          components: [activityButtons()]
         });
 
         if (game.players.size >= game.needed && !game.lineupStarted) {
@@ -1117,6 +1118,7 @@ client.on("interactionCreate", async interaction => {
       }
 
       if (interaction.customId === "friendly_no") {
+        if (game.locked) return interaction.reply({ content: "This friendly is already locked.", ephemeral: true });
         game.players.delete(interaction.user.id);
 
         for (const [position, playerId] of game.lineup) {
@@ -1128,7 +1130,7 @@ client.on("interactionCreate", async interaction => {
         const activity = await interaction.channel.messages.fetch(game.activityMessageId);
         await activity.edit({
           embeds: [createActivityEmbed(game)],
-          components: [activityButtons(game)]
+          components: [activityButtons()]
         });
 
         if (game.lineupMessageId) {
@@ -1142,6 +1144,12 @@ client.on("interactionCreate", async interaction => {
         }
 
         return interaction.reply({ content: "You are marked as unavailable.", ephemeral: true });
+      }
+
+      if (interaction.customId === "close_friendly") {
+        if (interaction.user.id !== game.hostId && !canHost(interaction.member)) return interaction.reply({ content: hostOnlyMessage(), ephemeral: true });
+        await closeFriendly(guildId);
+        return interaction.update({ content: "Friendly closed. You can start another one now.", embeds: [], components: [] });
       }
 
       if (interaction.customId === "friendly_reset") {
@@ -1161,7 +1169,7 @@ client.on("interactionCreate", async interaction => {
         const activity = await interaction.channel.messages.fetch(game.activityMessageId);
         await activity.edit({
           embeds: [createActivityEmbed(game)],
-          components: [activityButtons(game)]
+          components: [activityButtons()]
         });
 
         if (game.lineupMessageId) {
@@ -1173,12 +1181,6 @@ client.on("interactionCreate", async interaction => {
 
         game.lineupMessageId = null;
         return interaction.reply({ content: "Friendly reset.", ephemeral: true });
-      }
-
-      if (interaction.customId === "close_friendly") {
-        if (interaction.user.id !== game.hostId && !canHost(interaction.member)) return interaction.reply({ content: hostOnlyMessage(), ephemeral: true });
-        await closeFriendly(guildId);
-        return interaction.update({ content: "Friendly closed. You can start another one now.", embeds: [], components: [] });
       }
 
       if (interaction.customId === "sub_mode") {
@@ -1283,13 +1285,7 @@ client.on("interactionCreate", async interaction => {
           });
         }
 
-        for (const [oldPosition, playerId] of game.lineup) {
-          if (playerId === interaction.user.id) {
-            game.lineup.delete(oldPosition);
-          }
-        }
-
-        game.lineup.set(position, interaction.user.id);
+        moveExclusive(game.lineup, interaction.user.id, position);
         await interaction.message.edit({
           embeds: [createLineupEmbed(game)],
           components: createLineupButtons(game)
@@ -1350,10 +1346,10 @@ client.on("interactionCreate", async interaction => {
         const teamLabel = parts[2]; // "A" or "B"
         const position = parts.slice(3).join("_");
 
+        if (!SCRIM_FORMATION_7.positions.includes(position)) return interaction.reply({ content: "Invalid scrim position.", ephemeral: true });
         const teamMap = teamLabel === "A" ? scrim.teamA : scrim.teamB;
         const otherTeamMap = teamLabel === "A" ? scrim.teamB : scrim.teamA;
 
-        if (!SCRIM_FORMATION_7.positions.includes(position)) return interaction.reply({ content: "Invalid scrim position.", ephemeral: true });
         const currentPlayer = teamMap.get(position);
         if (currentPlayer && currentPlayer !== interaction.user.id) return interaction.reply({ content: `That position on Team ${teamLabel} is already taken.`, ephemeral: true });
         removeUser(otherTeamMap, interaction.user.id);
@@ -1410,7 +1406,7 @@ client.on("interactionCreate", async interaction => {
           components: []
         });
 
-        return interaction.reply({ content: "3-1-3 lineup locked.", ephemeral: true });
+        return interaction.reply({ content: "Lineup locked.", ephemeral: true });
       }
 
       if (interaction.customId.startsWith("lineup8_pos_")) {
