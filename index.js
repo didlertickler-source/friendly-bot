@@ -34,129 +34,31 @@ const client = new Client({
 const games = new Map();       // guildId -> friendly game
 const scrims = new Map();      // guildId -> scrim
 const activities = new Map();  // guildId -> activity check
-const lineups = new Map();     // guildId -> standalone lineup
-const activityMessages = new Map(); // messageId -> activity check
-const lifecycleLocks = new Set();
+const lineups = new Map();     // guildId -> lineup (3-1-3)
 
 const PREFIX = "?";
 const HOSTER_ROLE = "〔✦〕FF Hoster";
-const TRIAL_HOSTER_ROLE = "〔✦〕Trial Hoster";
-const THEME = 0x16A085;
-const ACCENT = 0xF1C40F;
-const MAX_LIFECYCLE_MESSAGES = 3;
-const FRIENDLY_TTL = 2 * 60 * 60 * 1000;
+const THEME = 0x5865F2;
 
 function makeEmbed(title, description = "") {
   return new EmbedBuilder()
     .setColor(THEME)
     .setTitle(`〔✦〕 ${title}`)
-    .setDescription(safeText(description, 4096))
-    .setFooter({ text: "Betis Operations" })
+    .setDescription(description)
     .setTimestamp();
-}
-
-function hasRole(member, roleName) {
-  return Boolean(member?.roles?.cache?.some(role => role.name === roleName));
 }
 
 function canHost(member) {
-  return Boolean(member && (
-    member.permissions.has(PermissionsBitField.Flags.Administrator) ||
-    hasRole(member, HOSTER_ROLE) ||
-    hasRole(member, TRIAL_HOSTER_ROLE)
-  ));
-}
+  if (!member) return false;
 
-function canAdmin(member) {
-  return Boolean(member && (
+  return (
     member.permissions.has(PermissionsBitField.Flags.Administrator) ||
-    hasRole(member, HOSTER_ROLE)
-  ));
+    member.roles.cache.some(role => role.name === HOSTER_ROLE)
+  );
 }
 
 function hostOnlyMessage() {
-  return `You need **Administrator**, **${HOSTER_ROLE}**, or **${TRIAL_HOSTER_ROLE}**.`;
-}
-
-function adminOnlyMessage() {
-  return `You need **Administrator** or **${HOSTER_ROLE}**.`;
-}
-
-function safeText(value, max = 1024) {
-  return String(value ?? "").replace(/@everyone|@here/g, "@everyone").slice(0, max);
-}
-
-function mapHasPlayer(map, userId) {
-  for (const [position, playerId] of map) {
-    if (playerId === userId) return position;
-  }
-  return null;
-}
-
-function movePlayerToPosition(map, userId, position) {
-  for (const [oldPosition, playerId] of map) {
-    if (playerId === userId && oldPosition !== position) map.delete(oldPosition);
-  }
-  map.set(position, userId);
-}
-
-function clearLifecycle(guildId) {
-  const game = games.get(guildId);
-  if (game) game.expired = true;
-  games.delete(guildId);
-  activities.delete(guildId);
-  lineups.delete(guildId);
-  for (const [messageId, activity] of activityMessages) {
-    if (activity.guildId === guildId) activityMessages.delete(messageId);
-  }
-}
-
-function registerLifecycleMessage(message, type, guildId) {
-  const entry = { guildId, type, messageId: message.id, createdAt: Date.now() };
-  const list = message.client.__lifecycleMessages ?? (message.client.__lifecycleMessages = []);
-  list.push(entry);
-  while (list.length > MAX_LIFECYCLE_MESSAGES) {
-    const expired = list.shift();
-    clearLifecycle(expired.guildId);
-  }
-}
-
-async function fetchIfExists(channel, messageId) {
-  if (!channel || !messageId) return null;
-  try { return await channel.messages.fetch(messageId); } catch { return null; }
-}
-
-async function retireFriendly(guildId, reason = "Friendly closed") {
-  const game = games.get(guildId);
-  if (!game) return false;
-  const channel = client.channels.cache.get(game.channelId);
-  for (const messageId of [game.activityMessageId, game.lineupMessageId]) {
-    const msg = await fetchIfExists(channel, messageId);
-    if (msg) await msg.delete().catch(() => {});
-  }
-  games.delete(guildId);
-  return true;
-}
-
-function makeHelpEmbed() {
-  return new EmbedBuilder()
-    .setColor(THEME)
-    .setTitle("〔✦〕 BETIS COMMAND CENTER")
-    .setDescription("Football operations, lineups, activity checks and server tools — organised in one place.")
-    .addFields(
-      { name: "⚽ Match operations", value: "`/friendly <players>` — create a friendly
-`/scrim` — create a 7v7 scrim
-`/activity <needed>` — run an activity check
-`/lineup` — open a standalone 3-1-3 lineup", inline: false },
-      { name: "📋 Lineup rules", value: "Pick one position at a time. Picking a new position automatically removes your old one. Hosts can replace players, lock lineups and close activities.", inline: false },
-      { name: "🛡️ Access", value: `Host commands: Administrator, **${HOSTER_ROLE}**, or **${TRIAL_HOSTER_ROLE}**. Moderation commands still require their matching Discord permission.`, inline: false },
-      { name: "🧰 Utilities", value: "`?matchstatus` `?closefriendly` `?closescrim` `?closeactivity` `?closelineup`
-`?teamrank XI` `?membercount` `?serverinfo` `?userinfo` `?avatar`
-`?ping` `?uptime` `?poll` `?choose` `?coinflip` `?8ball` `?random`", inline: false },
-      { name: "🛡️ Moderation", value: "`?purge` `?kick` `?ban` `?unban` `?timeout` `?untimeout` `?warn` `?lock` `?unlock` `?slowmode`", inline: false }
-    )
-    .setFooter({ text: "Use buttons on a live panel • Stale panels are cleaned automatically" })
-    .setTimestamp();
+  return `You need the **${HOSTER_ROLE}** role or **Administrator** permission to use this.`;
 }
 
 const formations = {
@@ -178,7 +80,7 @@ const formations = {
   },
   8: {
     name: "3-1-3",
-    positions: ["GK", "LB", "CB", "RB", "CM", "LW", "ST", "RW"]
+    positions: ["GK", "LB", "CB", "RB", "CAM", "LW", "ST", "RW"]
   },
   9: {
     name: "3-2-3",
@@ -191,14 +93,6 @@ const formations = {
   11: {
     name: "4-3-3",
     positions: ["GK", "LB", "LCB", "RCB", "RB", "LCM", "CAM", "RCM", "LW", "ST", "RW"]
-  },
-  12: {
-    name: "4-2-3-2",
-    positions: ["GK", "LB", "LCB", "RCB", "RB", "LDM", "RDM", "LW", "CAM", "RW", "ST", "CF"]
-  },
-  13: {
-    name: "4-3-3 + SUB",
-    positions: ["GK", "LB", "LCB", "RCB", "RB", "LCM", "CAM", "RCM", "LW", "ST", "RW", "SUB1", "SUB2"]
   }
 };
 
@@ -263,118 +157,218 @@ client.once("ready", async () => {
 function createActivityEmbed(game) {
   const formation = formations[game.needed];
   const players = [...game.players];
-  const status = players.length >= game.needed ? "READY FOR LINEUP" : "RECRUITING PLAYERS";
+
   return new EmbedBuilder()
-    .setColor(players.length >= game.needed ? 0x2ECC71 : THEME)
-    .setTitle("〔✦〕 FRIENDLY • PLAYER CHECK")
-    .setDescription(`**${status}**\n${players.length}/${game.needed} players confirmed\nFormation: **${formation.name}**\n\n${players.length ? players.map((id, i) => `**${i + 1}.** <@${id}>`).join("\n") : "No players have confirmed yet."}`)
-    .addFields(
-      { name: "How it works", value: "Press **CAN PLAY** once. Press **CAN'T PLAY** to withdraw. Your choice is remembered and your position is exclusive.", inline: false },
-      { name: "Host controls", value: "Reset the panel, open the lineup, replace a player, or lock the final XI.", inline: false }
+    .setTitle("〔✦〕 FRIENDLY ACTIVITY CHECK")
+    .setDescription(
+      `**Players:** ${players.length}/${game.needed}\n` +
+      `**Formation:** ${formation.name}\n\n` +
+      (players.length
+        ? players.map(id => `> <@${id}>`).join("\n")
+        : "> No players yet.")
     )
-    .setFooter({ text: game.expiresAt ? `Auto-closes <t:${Math.floor(game.expiresAt / 1000)}:R>` : "Betis Match Operations" })
-    .setTimestamp();
+    .setFooter({
+      text: "Click CAN PLAY if you are available."
+    });
 }
 
 function activityButtons(game) {
   return new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId("friendly_play").setLabel("CAN PLAY").setEmoji("✅").setStyle(ButtonStyle.Success),
-    new ButtonBuilder().setCustomId("friendly_no").setLabel("CAN'T PLAY").setEmoji("❌").setStyle(ButtonStyle.Danger),
-    new ButtonBuilder().setCustomId("friendly_reset").setLabel("RESET").setEmoji("🔄").setStyle(ButtonStyle.Secondary)
+    new ButtonBuilder()
+      .setCustomId("friendly_play")
+      .setLabel("CAN PLAY")
+      .setStyle(ButtonStyle.Success),
+
+    new ButtonBuilder()
+      .setCustomId("friendly_no")
+      .setLabel("CAN'T PLAY")
+      .setStyle(ButtonStyle.Danger),
+
+    new ButtonBuilder()
+      .setCustomId("friendly_reset")
+      .setLabel("RESET")
+      .setStyle(ButtonStyle.Secondary)
   );
 }
 
 function createLineupEmbed(game) {
   const formation = formations[game.needed];
-  const lines = formation.positions.map(position => {
+  let text = "";
+
+  for (const position of formation.positions) {
     const player = game.lineup.get(position);
-    return `${player ? "🟢" : "⚪"} **${position}** — ${player ? `<@${player}>` : "OPEN"}`;
-  });
+    text += `**${position}**\n`;
+    text += player ? `> <@${player}>\n\n` : "> `OPEN`\n\n";
+  }
+
   return new EmbedBuilder()
-    .setColor(game.locked ? 0x2ECC71 : THEME)
-    .setTitle(`〔✦〕 LINEUP BOARD • ${formation.name}`)
-    .setDescription(lines.join("\n"))
-    .addFields(
-      { name: "Selection logic", value: "One player = one position. Choosing another position automatically transfers the player and clears the previous slot.", inline: false },
-      { name: "Squad", value: `${game.lineup.size}/${game.needed} positions filled`, inline: true },
-      { name: "Status", value: game.locked ? "LOCKED" : game.subMode ? "SUB MODE" : "OPEN", inline: true }
-    )
-    .setFooter({ text: game.locked ? "LINEUP LOCKED" : game.subMode ? "Select a filled position to replace its player" : "Select an open position to join" })
-    .setTimestamp();
+    .setTitle(`〔✦〕 LINEUP • ${formation.name}`)
+    .setDescription(text)
+    .setFooter({
+      text: game.locked
+        ? "LINEUP LOCKED"
+        : game.subMode
+          ? "SUB MODE • Select a player to replace"
+          : "Select a position to join the lineup."
+    });
 }
 
 function createLineupButtons(game) {
+  const formation = formations[game.needed];
   const rows = [];
   let currentRow = [];
-  for (const position of formations[game.needed].positions) {
+
+  for (const position of formation.positions) {
     const player = game.lineup.get(position);
-    currentRow.push(new ButtonBuilder()
+
+    const button = new ButtonBuilder()
       .setCustomId(`position_${position}`)
-      .setLabel(player ? `${position} ✓` : position)
-      .setStyle(game.subMode && player ? ButtonStyle.Danger : player ? ButtonStyle.Success : ButtonStyle.Secondary));
-    if (currentRow.length === 5) { rows.push(new ActionRowBuilder().addComponents(currentRow)); currentRow = []; }
+      .setLabel(player ? `${position} • FILLED` : position)
+      .setStyle(
+        game.subMode && player
+          ? ButtonStyle.Danger
+          : player
+            ? ButtonStyle.Success
+            : ButtonStyle.Secondary
+      );
+
+    currentRow.push(button);
+
+    if (currentRow.length === 5) {
+      rows.push(new ActionRowBuilder().addComponents(currentRow));
+      currentRow = [];
+    }
   }
-  if (currentRow.length) rows.push(new ActionRowBuilder().addComponents(currentRow));
-  if (!game.locked) rows.push(new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId("sub_mode").setLabel(game.subMode ? "CANCEL SUB" : "SUB MODE").setStyle(game.subMode ? ButtonStyle.Danger : ButtonStyle.Primary),
-    new ButtonBuilder().setCustomId("lock_lineup").setLabel("LOCK LINEUP").setEmoji("🔒").setStyle(ButtonStyle.Success),
-    new ButtonBuilder().setCustomId("close_friendly").setLabel("CLOSE").setStyle(ButtonStyle.Secondary)
-  ));
+
+  if (currentRow.length) {
+    rows.push(new ActionRowBuilder().addComponents(currentRow));
+  }
+
+  if (!game.locked) {
+    const controlRow = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId("sub_mode")
+        .setLabel(game.subMode ? "CANCEL SUB" : "SUB")
+        .setStyle(game.subMode ? ButtonStyle.Danger : ButtonStyle.Primary),
+
+      new ButtonBuilder()
+        .setCustomId("lock_lineup")
+        .setLabel("LOCK LINEUP")
+        .setStyle(ButtonStyle.Success)
+    );
+
+    rows.push(controlRow);
+  }
+
   return rows;
 }
 
-// SCRIM HELPERS
-const SCRIM_FORMATION_7 = formations[7];
-
-function buildTeamLines(teamMap) {
-  return SCRIM_FORMATION_7.positions.map(pos => `${teamMap.has(pos) ? "🟢" : "⚪"} **${pos}** — ${teamMap.get(pos) ? `<@${teamMap.get(pos)}>` : "OPEN"}`);
-}
+// SCRIM HELPERS (7v7, 3-1-2 both teams)
+const SCRIM_FORMATION_7 = formations[7]; // 3-1-2
 
 function createScrimEmbed(scrim) {
+  const lines = [
+    `**Team A** (3-1-2)`,
+    ...buildTeamLines(scrim.teamA),
+    "",
+    `**Team B** (3-1-2)`,
+    ...buildTeamLines(scrim.teamB)
+  ];
+
   return new EmbedBuilder()
-    .setColor(scrim.locked ? 0x2ECC71 : THEME)
-    .setTitle("〔✦〕 SCRIM BOARD • 7V7")
-    .setDescription(`**Team A**\n${buildTeamLines(scrim.teamA).join("\n")}\n\n**Team B**\n${buildTeamLines(scrim.teamB).join("\n")}`)
-    .addFields(
-      { name: "Formation", value: "3-1-2 per side", inline: true },
-      { name: "Players", value: `${scrim.teamA.size + scrim.teamB.size}/14`, inline: true },
-      { name: "Rules", value: "A player can only occupy one slot across both teams. Selecting a new slot transfers them automatically.", inline: false }
-    )
-    .setFooter({ text: scrim.locked ? "SCRIM LOCKED" : "Choose a team position • Host locks when complete" })
-    .setTimestamp();
+    .setTitle("〔✦〕 SCRIM • 7V7")
+    .setDescription(lines.join("\n"))
+    .setFooter({
+      text: scrim.locked
+        ? "SCRIM LINEUPS LOCKED"
+        : "Click a position to join. Host can lock when full."
+    })
+    .setColor(THEME);
 }
 
-function createTeamButtonRows(teamMap, teamLabel) {
-  const rows = [];
-  let currentRow = [];
+function buildTeamLines(teamMap) {
+  const lines = [];
   for (const pos of SCRIM_FORMATION_7.positions) {
     const player = teamMap.get(pos);
-    currentRow.push(new ButtonBuilder().setCustomId(`scrim_pos_${teamLabel}_${pos}`).setLabel(player ? `${teamLabel} ${pos} ✓` : `${teamLabel} ${pos}`).setStyle(player ? ButtonStyle.Success : ButtonStyle.Secondary));
-    if (currentRow.length === 5) { rows.push(new ActionRowBuilder().addComponents(currentRow)); currentRow = []; }
+    lines.push(`**${pos}**`);
+    lines.push(player ? `> <@${player}>` : "> `OPEN`");
+    lines.push("");
   }
-  if (currentRow.length) rows.push(new ActionRowBuilder().addComponents(currentRow));
-  return rows;
+  return lines;
 }
 
 function createScrimButtons(scrim) {
-  const rows = [...createTeamButtonRows(scrim.teamA, "A"), ...createTeamButtonRows(scrim.teamB, "B")];
-  if (!scrim.locked) rows.push(new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId("scrim_lock").setLabel("LOCK SCRIM").setEmoji("🔒").setStyle(ButtonStyle.Success),
-    new ButtonBuilder().setCustomId("close_scrim").setLabel("CLOSE").setStyle(ButtonStyle.Secondary)
-  ));
+  const rows = [];
+
+  const teamARows = createTeamButtonRows(scrim.teamA, "A", scrim);
+  rows.push(...teamARows);
+
+  const teamBRows = createTeamButtonRows(scrim.teamB, "B", scrim);
+  rows.push(...teamBRows);
+
+  if (!scrim.locked) {
+    const controlRow = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId("scrim_lock")
+        .setLabel("LOCK SCRIM")
+        .setStyle(ButtonStyle.Success)
+    );
+
+    rows.push(controlRow);
+  }
+
+  return rows;
+}
+
+function createTeamButtonRows(teamMap, teamLabel, scrim) {
+  const rows = [];
+  let currentRow = [];
+
+  for (const pos of SCRIM_FORMATION_7.positions) {
+    const player = teamMap.get(pos);
+
+    const button = new ButtonBuilder()
+      .setCustomId(`scrim_pos_${teamLabel}_${pos}`)
+      .setLabel(player ? `${pos} • FILLED` : `${teamLabel} • ${pos}`)
+      .setStyle(
+        player
+          ? ButtonStyle.Success
+          : ButtonStyle.Secondary
+      );
+
+    currentRow.push(button);
+
+    if (currentRow.length === 5) {
+      rows.push(new ActionRowBuilder().addComponents(currentRow));
+      currentRow = [];
+    }
+  }
+
+  if (currentRow.length) {
+    rows.push(new ActionRowBuilder().addComponents(currentRow));
+  }
+
   return rows;
 }
 
 // ACTIVITY CHECK EMBED
 function createActivityCheckEmbed(activity) {
   const reacted = [...activity.reacted].map(id => `<@${id}>`);
+
   return new EmbedBuilder()
-    .setColor(activity.completed ? 0x2ECC71 : THEME)
     .setTitle("〔✦〕 ACTIVITY CHECK • REAL BETIS")
-    .setDescription(`React with 🔥 to show your activity.\n\n**Progress:** ${activity.reacted.size}/${activity.needed}\n${reacted.length ? reacted.map((id, i) => `**${i + 1}.** ${id}`).join("\n") : "Nobody has reacted yet."}`)
-    .addFields({ name: "Status", value: activity.completed ? "COMPLETED" : "OPEN", inline: true }, { name: "Next step", value: "The host can close this check and start another one whenever needed.", inline: true })
-    .setFooter({ text: activity.completed ? "Activity check completed" : "One 🔥 reaction per member" })
-    .setTimestamp();
+    .setDescription(
+      "Activity check for real betis 🥳🔥\n" +
+      "react to show ur activity to betis\n\n" +
+      `**Reacted:** ${activity.reacted.size}/${activity.needed}\n` +
+      (reacted.length ? reacted.map(id => `> ${id}`).join("\n") : "> No reactions yet.")
+    )
+    .setFooter({
+      text: activity.completed
+        ? "Activity check completed!"
+        : "React to this message to join."
+    })
+    .setColor(THEME);
 }
 
 // LINEUP 3-1-3 EMBED & BUTTONS
@@ -500,38 +494,35 @@ client.on("messageCreate", async message => {
 
   try {
     if (commandName === "help" || commandName === "commands") {
-      const embed = makeEmbed(
-        "COMMAND CENTER",
-        [
-          "### ⚽ FRIENDLY SYSTEM",
-          "`/friendly <players>` — start an activity check",
-          "`/scrim` — start a 7v7 scrim (3-1-2 both teams)",
-          "`/activity <needed>` — activity check for Real Betis",
-          "`/lineup` — 3-1-3 lineup picker (8 players)",
-          "",
-          "### 🛡️ MODERATION",
-          "`?purge <amount>` `?clear <amount>`",
-          "`?kick @user [reason]` `?ban @user [reason]`",
-          "`?unban <userID>` `?timeout @user <minutes>` `?untimeout @user`",
-          "`?warn @user [reason]` `?lock` `?unlock` `?slowmode <seconds>`",
-          "",
-          "### 🏟️ SERVER",
-          "`?teamrank XI` `?membercount` `?serverinfo`",
-          "`?userinfo [@user]` `?avatar [@user]`",
-          "`?roleinfo @role` `?channelinfo` `?servericon`",
-          "",
-          "### 🧰 UTILITY",
-          "`?ping` `?uptime` `?botinfo` `?online` `?offline` `?members`",
-          "`?say <message>` `?announce <message>` `?poll <question>`",
-          "`?choose <option1 | option2 | ...>`",
-          "`?coinflip` `?8ball <question>` `?random <min> <max>`",
-          "`?topic <text>`",
-          "",
-          "### ✦ FRIENDLY ACCESS",
-          `Only **${HOSTER_ROLE}** or members with **Administrator** can use \`/friendly\`, \`/scrim\`, and \`/lineup\`.`
-        ].join("\n")
-      );
-
+      const lines = [
+        "### ⚽ FRIENDLY SYSTEM",
+        "`/friendly <players>` — start an activity check",
+        "`/scrim` — start a 7v7 scrim (3-1-2 both teams)",
+        "`/activity <needed>` — activity check for Real Betis",
+        "`/lineup` — 3-1-3 lineup picker (8 players)",
+        "",
+        "### 🛡️ MODERATION",
+        "`?purge <amount>` `?clear <amount>`",
+        "`?kick @user [reason]` `?ban @user [reason]`",
+        "`?unban <userID>` `?timeout @user <minutes>` `?untimeout @user`",
+        "`?warn @user [reason]` `?lock` `?unlock` `?slowmode <seconds>`",
+        "",
+        "### 🏟️ SERVER",
+        "`?teamrank XI` `?membercount` `?serverinfo`",
+        "`?userinfo [@user]` `?avatar [@user]`",
+        "`?roleinfo @role` `?channelinfo` `?servericon`",
+        "",
+        "### 🧰 UTILITY",
+        "`?ping` `?uptime` `?botinfo` `?online` `?offline` `?members`",
+        "`?say <message>` `?announce <message>` `?poll <question>`",
+        "`?choose <option1 | option2 | ...>`",
+        "`?coinflip` `?8ball <question>` `?random <min> <max>`",
+        "`?topic <text>`",
+        "",
+        "### ✦ FRIENDLY ACCESS",
+        `Only **${HOSTER_ROLE}** or members with **Administrator** can use /friendly, /scrim, and /lineup.`
+      ];
+      const embed = makeEmbed("COMMAND CENTER", lines.join("\n"));
       return message.reply({ embeds: [embed] });
     }
 
